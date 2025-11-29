@@ -24,6 +24,7 @@ public class QrCodeCoverScreen : ScreenBase
     private bool _canUpload;
     public Image diskAvaliableIcon;
 
+    [SerializeField] private Texture2D _photoTexture;
 
     public void SetSelectedPhotos(List<Texture2D> selectedPhotos)
     {
