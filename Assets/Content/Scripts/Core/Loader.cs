@@ -13,6 +13,7 @@ using UnityEngine.Networking;
 using UnityEngine.UI;
 using UnityEngine.Video;
 
+
 public class Loader : MonoBehaviour
 {
     public bool IsPortrait;
@@ -39,6 +40,11 @@ public class Loader : MonoBehaviour
     public bool posterCreationFinished;
 
     public int sensitivity = 20;
+
+
+    [SerializeField] private Texture2D overlayTexture;
+    [SerializeField] private Material blendMaterial;
+
 
     public async void Init()
     {
@@ -280,6 +286,26 @@ public class Loader : MonoBehaviour
     }
 
 
+    private Texture2D BlendTextures(Texture2D baseTexture)
+    {
+        Texture2D result = new Texture2D(baseTexture.width, baseTexture.height);
+
+        for (int x = 0; x < baseTexture.width; x++)
+        {
+            for (int y = 0; y < baseTexture.height; y++)
+            {
+                Color bgColor = baseTexture.GetPixel(x, y);
+                Color fgColor = overlayTexture.GetPixel(x, y);
+                Color finalColor = Color.Lerp(bgColor, fgColor, fgColor.a);
+                result.SetPixel(x, y, finalColor);
+            }
+        }
+
+        result.Apply();
+        return result;
+    }
+
+
     public async Task UploadSelectedPhotosToDisk(Texture2D[] textures, bool hasConnection, bool isPoster = false)
     {
         var names = new string[textures.Length];
@@ -295,7 +321,9 @@ public class Loader : MonoBehaviour
                 var index = i;
                 fileCreated = false;
                 names[index] = index.ToString() + "." + photoFormat;
-                await SaveScreenshotToFile(textures[i], names[index]);
+                Texture2D tmp = BlendTextures(textures[i]);
+                await SaveScreenshotToFile(tmp, names[index]);
+                //await SaveScreenshotToFile(textures[i], names[index]);
             }
         }
         else
