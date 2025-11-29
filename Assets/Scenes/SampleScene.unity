@@ -12822,7 +12822,7 @@ MonoBehaviour:
   folderName: 
   posterCreationFinished: 0
   sensitivity: 20
-  overlayTexture: {fileID: 2800000, guid: a82ab03cabaf8b046ad2148f58975250, type: 3}
+  overlayTexture: {fileID: 2800000, guid: 6f0dec690da5c8d48933d9f9ef9a98f7, type: 3}
   blendMaterial: {fileID: 2100000, guid: 766d0c6a90356584aa2736ae9cc8d6e4, type: 2}
   _expectedPhotoCount: 12
   _checkIntervalMs: 500
