@@ -288,6 +288,12 @@ public class Loader : MonoBehaviour
 
     private Texture2D BlendTextures(Texture2D baseTexture)
     {
+        // Проверяем размеры текстур и при необходимости изменяем overlayTexture
+        if (baseTexture.width != overlayTexture.width || baseTexture.height != overlayTexture.height)
+        {
+            overlayTexture = ResizeTexture(overlayTexture, baseTexture.width, baseTexture.height);
+        }
+
         Texture2D result = new Texture2D(baseTexture.width, baseTexture.height);
 
         for (int x = 0; x < baseTexture.width; x++)
@@ -303,6 +309,27 @@ public class Loader : MonoBehaviour
 
         result.Apply();
         return result;
+    }
+
+    // Метод для изменения размера текстуры
+    private Texture2D ResizeTexture(Texture2D sourceTexture, int newWidth, int newHeight)
+    {
+        RenderTexture rt = new RenderTexture(newWidth, newHeight, 24);
+        RenderTexture.active = rt;
+
+        // Копируем исходную текстуру в RenderTexture с новым размером
+        Graphics.Blit(sourceTexture, rt);
+
+        // Создаем новую текстуру нужного размера
+        Texture2D resizedTexture = new Texture2D(newWidth, newHeight);
+        resizedTexture.ReadPixels(new Rect(0, 0, newWidth, newHeight), 0, 0);
+        resizedTexture.Apply();
+
+        // Очищаем RenderTexture
+        RenderTexture.active = null;
+        rt.Release();
+
+        return resizedTexture;
     }
 
 
