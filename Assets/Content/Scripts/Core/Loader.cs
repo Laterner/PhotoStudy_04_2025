@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.Serialization.Formatters.Binary;
+using System.Threading;
 using System.Threading.Tasks;
 using Project;
 using Unity.VisualScripting;
@@ -286,7 +287,10 @@ public class Loader : MonoBehaviour
     }
 
 
-    private Texture2D BlendTextures(Texture2D baseTexture)
+
+    private async Task<Texture2D> BlendTexturesAsync(Texture2D baseTexture,
+                                                 IProgress<float> progress = null,
+                                                 CancellationToken cancellationToken = default)
     {
         // Проверяем размеры текстур и при необходимости изменяем overlayTexture
         if (baseTexture.width != overlayTexture.width || baseTexture.height != overlayTexture.height)
@@ -296,7 +300,43 @@ public class Loader : MonoBehaviour
 
         Texture2D result = new Texture2D(baseTexture.width, baseTexture.height);
 
-        for (int x = 0; x < baseTexture.width; x++)
+        // Определяем размер чанка для обработки за один кадр
+        int chunkSize = Mathf.Max(1, baseTexture.width / 100); // Обрабатываем по 1% ширины за раз
+
+        try
+        {
+            for (int x = 0; x < baseTexture.width; x += chunkSize)
+            {
+                // Проверяем отмену операции
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // Обрабатываем текущий чанк
+                int endX = Mathf.Min(x + chunkSize, baseTexture.width);
+                ProcessTextureChunk(baseTexture, overlayTexture, result, x, endX);
+
+                // Отправляем прогресс
+                progress?.Report((float)x / baseTexture.width);
+
+                // Даем возможность обработать другие задачи в основном потоке
+                await Task.Yield();
+            }
+
+            result.Apply();
+            progress?.Report(1f);
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            UnityEngine.Object.Destroy(result);
+            throw;
+        }
+    }
+
+    // Метод для обработки части текстуры
+    private void ProcessTextureChunk(Texture2D baseTexture, Texture2D overlayTexture,
+                                     Texture2D result, int startX, int endX)
+    {
+        for (int x = startX; x < endX; x++)
         {
             for (int y = 0; y < baseTexture.height; y++)
             {
@@ -306,9 +346,6 @@ public class Loader : MonoBehaviour
                 result.SetPixel(x, y, finalColor);
             }
         }
-
-        result.Apply();
-        return result;
     }
 
     // Метод для изменения размера текстуры
@@ -348,7 +385,7 @@ public class Loader : MonoBehaviour
                 var index = i;
                 fileCreated = false;
                 names[index] = index.ToString() + "." + photoFormat;
-                Texture2D tmp = BlendTextures(textures[i]);
+                Texture2D tmp = await BlendTexturesAsync(textures[i]);
                 await SaveScreenshotToFile(tmp, names[index]);
                 //await SaveScreenshotToFile(textures[i], names[index]);
             }
