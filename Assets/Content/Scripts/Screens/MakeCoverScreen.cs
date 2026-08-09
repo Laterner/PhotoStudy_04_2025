@@ -3,10 +3,9 @@ using UnityEngine.UI;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-using TMPro;
 using System;
-using Unity.VisualScripting;
 using System.Threading.Tasks;
+using Unity.VisualScripting;
 
 public class MakeCoverScreen : ScreenBase
 {
@@ -180,9 +179,10 @@ public class MakeCoverScreen : ScreenBase
                _posterImage.transform.position
            );
 
+        // здесь начинаем работу
         Vector2 size = _posterImage.rectTransform.rect.size;
         _loader.CaptureAreaAndSave(_posterImage.rectTransform, _loader.GetFilePath(), DateTime.Now.ToSafeString().Replace(" ", "").Replace(":", "").Replace(".", "").Replace("_", ""));
-        // await Task.Delay(1000);
+         await Task.Delay(1000);
         // await _loader.UploadSelectedPhotosToDisk(new Texture2D[1] { GlobalChosesDataContainer.Instance.Poster }, true, true);
         ScreenManager.Instance.ShowScreen<QrCodeCoverScreen>();
     }
