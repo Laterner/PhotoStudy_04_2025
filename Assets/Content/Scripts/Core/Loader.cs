@@ -289,84 +289,137 @@ public class Loader : MonoBehaviour
 
 
     private async Task<Texture2D> BlendTexturesAsync(Texture2D baseTexture,
-                                                 IProgress<float> progress = null,
-                                                 CancellationToken cancellationToken = default)
+                                             IProgress<float> progress = null,
+                                             CancellationToken cancellationToken = default)
     {
-        // Проверяем размеры текстур и при необходимости изменяем overlayTexture
-        if (baseTexture.width != overlayTexture.width || baseTexture.height != overlayTexture.height)
-        {
-            overlayTexture = ResizeTexture(overlayTexture, baseTexture.width, baseTexture.height);
-        }
-
-        Texture2D result = new Texture2D(baseTexture.width, baseTexture.height);
-
-        // Определяем размер чанка для обработки за один кадр
-        int chunkSize = Mathf.Max(1, baseTexture.width / 100); // Обрабатываем по 1% ширины за раз
+        Texture2D resizedOverlay = null;
+        Texture2D result = null;
 
         try
         {
-            for (int x = 0; x < baseTexture.width; x += chunkSize)
+            // Проверяем размеры текстур
+            if (baseTexture.width != overlayTexture.width || baseTexture.height != overlayTexture.height)
             {
-                // Проверяем отмену операции
-                cancellationToken.ThrowIfCancellationRequested();
-
-                // Обрабатываем текущий чанк
-                int endX = Mathf.Min(x + chunkSize, baseTexture.width);
-                ProcessTextureChunk(baseTexture, overlayTexture, result, x, endX);
-
-                // Отправляем прогресс
-                progress?.Report((float)x / baseTexture.width);
-
-                // Даем возможность обработать другие задачи в основном потоке
-                await Task.Yield();
+                resizedOverlay = ResizeTexture(overlayTexture, baseTexture.width, baseTexture.height);
+            }
+            else
+            {
+                resizedOverlay = overlayTexture;
             }
 
-            result.Apply();
+            // Конвертируем NativeArray в обычный массив
+            var baseData = baseTexture.GetRawTextureData<Color32>().ToArray();
+            var overlayData = resizedOverlay.GetRawTextureData<Color32>().ToArray();
+            var resultData = new Color32[baseData.Length];
+
+            int totalPixels = baseData.Length;
+            int chunkSize = Mathf.Max(1024, totalPixels / 100);
+            int progressStep = Mathf.Max(1, totalPixels / 100);
+            int nextProgressReport = 0;
+
+            for (int i = 0; i < totalPixels; i += chunkSize)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                int endIndex = Mathf.Min(i + chunkSize, totalPixels);
+
+                ProcessChunkFast(baseData, overlayData, resultData, i, endIndex);
+
+                if (i >= nextProgressReport)
+                {
+                    progress?.Report((float)i / totalPixels);
+                    nextProgressReport += progressStep;
+                }
+
+                if ((i / chunkSize) % 10 == 0)
+                {
+                    await Task.Yield();
+                }
+            }
+
+            result = new Texture2D(baseTexture.width, baseTexture.height,
+                                   TextureFormat.RGBA32, false);
+            result.SetPixelData(resultData, 0);
+            result.Apply(false);
+
             progress?.Report(1f);
             return result;
         }
         catch (OperationCanceledException)
         {
-            UnityEngine.Object.Destroy(result);
+            if (result != null)
+            {
+                Destroy(result);
+            }
             throw;
         }
-    }
-
-    // Метод для обработки части текстуры
-    private void ProcessTextureChunk(Texture2D baseTexture, Texture2D overlayTexture,
-                                     Texture2D result, int startX, int endX)
-    {
-        for (int x = startX; x < endX; x++)
+        finally
         {
-            for (int y = 0; y < baseTexture.height; y++)
+            if (resizedOverlay != null && resizedOverlay != overlayTexture)
             {
-                Color bgColor = baseTexture.GetPixel(x, y);
-                Color fgColor = overlayTexture.GetPixel(x, y);
-                Color finalColor = Color.Lerp(bgColor, fgColor, fgColor.a);
-                result.SetPixel(x, y, finalColor);
+                Destroy(resizedOverlay);
             }
         }
     }
 
-    // Метод для изменения размера текстуры
+    // Простая версия с обычными массивами
+    private void ProcessChunkFast(Color32[] baseData, Color32[] overlayData,
+                                  Color32[] resultData, int start, int end)
+    {
+        for (int i = start; i < end; i++)
+        {
+            var bgColor = baseData[i];
+            var fgColor = overlayData[i];
+
+            float alpha = fgColor.a / 255f;
+            float invAlpha = 1f - alpha;
+
+            resultData[i] = new Color32(
+                (byte)(bgColor.r * invAlpha + fgColor.r * alpha),
+                (byte)(bgColor.g * invAlpha + fgColor.g * alpha),
+                (byte)(bgColor.b * invAlpha + fgColor.b * alpha),
+                (byte)(bgColor.a * invAlpha + fgColor.a * alpha)
+            );
+        }
+    }
+
+    // Оптимизированный метод изменения размера текстуры с правильным управлением памятью
     private Texture2D ResizeTexture(Texture2D sourceTexture, int newWidth, int newHeight)
     {
-        RenderTexture rt = new RenderTexture(newWidth, newHeight, 24);
-        RenderTexture.active = rt;
+        // Проверяем, не нужно ли вообще менять размер
+        if (sourceTexture.width == newWidth && sourceTexture.height == newHeight)
+        {
+            return sourceTexture;
+        }
 
-        // Копируем исходную текстуру в RenderTexture с новым размером
-        Graphics.Blit(sourceTexture, rt);
+        RenderTexture rt = null;
+        Texture2D resizedTexture = null;
 
-        // Создаем новую текстуру нужного размера
-        Texture2D resizedTexture = new Texture2D(newWidth, newHeight);
-        resizedTexture.ReadPixels(new Rect(0, 0, newWidth, newHeight), 0, 0);
-        resizedTexture.Apply();
+        try
+        {
+            // Создаём RenderTexture с использованием GetTemporary для пулинга
+            rt = RenderTexture.GetTemporary(newWidth, newHeight, 24, RenderTextureFormat.ARGB32);
+            RenderTexture.active = rt;
 
-        // Очищаем RenderTexture
-        RenderTexture.active = null;
-        rt.Release();
+            // Копируем исходную текстуру в RenderTexture с новым размером
+            Graphics.Blit(sourceTexture, rt);
 
-        return resizedTexture;
+            // Создаём новую текстуру нужного размера
+            resizedTexture = new Texture2D(newWidth, newHeight, TextureFormat.RGBA32, false);
+            resizedTexture.ReadPixels(new Rect(0, 0, newWidth, newHeight), 0, 0);
+            resizedTexture.Apply(false); // false - не обновлять mipmaps
+
+            return resizedTexture;
+        }
+        finally
+        {
+            // Правильная очистка RenderTexture
+            RenderTexture.active = null;
+            if (rt != null)
+            {
+                RenderTexture.ReleaseTemporary(rt);
+            }
+        }
     }
 
 
