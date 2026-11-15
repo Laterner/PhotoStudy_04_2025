@@ -4,9 +4,7 @@ using System.Collections;
 
 public class ScreensaverScreen : ScreenBase
 {
-    [SerializeField] private CanvasGroup _canvasGroup;
     [SerializeField] private Button _touchArea;
-    [SerializeField] private float _fadeDuration = 1f;
 
     public override void Initialize()
     {
@@ -16,9 +14,11 @@ public class ScreensaverScreen : ScreenBase
 
     public override IEnumerator AnimateShow()
     {
+        ScreenManager.Instance.GetScreen<PhotoReviewScreen>().CleanPhotosContainer();
         GlobalChosesDataContainer.Instance.Clean();
         ScreenManager.Instance.GetScreen<LightingModeSelectionScreen>().SelectOption(4);
         yield return AnimateFadeIn(_canvasGroup, _fadeDuration);
+        yield return Resources.UnloadUnusedAssets();
     }
 
     public override IEnumerator AnimateHide()

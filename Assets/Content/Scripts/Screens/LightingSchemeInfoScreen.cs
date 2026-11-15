@@ -7,8 +7,6 @@ public class LightingSchemeInfoScreen : ScreenBase
     [SerializeField] private Image _schemeDiagram;
     [SerializeField] private Button _activateButton;
     [SerializeField] private Button _backButton;
-    [SerializeField] private CanvasGroup _canvasGroup;
-    [SerializeField] private float _fadeDuration = 0.8f;
     [SerializeField] private LightingSchemeData _currentScheme;
 
     public override void Initialize()

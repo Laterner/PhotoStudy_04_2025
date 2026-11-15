@@ -13,12 +13,11 @@ public class PhotoReviewScreen : ScreenBase
     [SerializeField] private Button _backButton;
     [SerializeField] private Loader _loader;
     private bool _canSelect;
+    private readonly List<GameObject> _thumbnails = new List<GameObject>();
 
-    private List<Texture2D> _capturedPhotos = new List<Texture2D>();
+    private List<Texture2D> CapturedPhotos => GlobalChosesDataContainer.Instance.Photos;
     private List<int> _selectedPhotoIndices = new List<int>();
 
-    [SerializeField] private CanvasGroup _canvasGroup;
-    [SerializeField] private float _fadeDuration = 0.8f;
 
     public bool TESTMODE;
 
@@ -43,11 +42,11 @@ public class PhotoReviewScreen : ScreenBase
     }
     private void LoadCapturedPhotos(Texture2D tex)
     {
-        _capturedPhotos.Add(tex);
-        Debug.Log(_capturedPhotos.Count);
-        GlobalChosesDataContainer.Instance.Photos = _capturedPhotos.ToList();
-        DisplayOnePhoto(tex, _capturedPhotos.Count - 1);
-        if (_capturedPhotos.Count > 0)
+        CapturedPhotos.Add(tex);
+        Debug.Log(CapturedPhotos.Count);
+
+        DisplayOnePhoto(tex, CapturedPhotos.Count - 1);
+        if (CapturedPhotos.Count > 0)
         {
             _canSelect = true;
         }
@@ -56,6 +55,7 @@ public class PhotoReviewScreen : ScreenBase
     private void DisplayOnePhoto(Texture2D tex, int index)
     {
         var photoObj = Instantiate(_photoPrefab, _photosContainer);
+        _thumbnails.Add(photoObj);
         var image = photoObj.transform.Find("Photo").GetComponent<Image>();
         var button = photoObj.GetComponent<Button>();
 
@@ -86,7 +86,7 @@ public class PhotoReviewScreen : ScreenBase
             _selectedPhotoIndices.Add(index);
         }
 
-        var photoObj = _photosContainer.GetChild(index).gameObject;
+        var photoObj = _thumbnails[index];
         UpdatePhotoSelectionVisual(photoObj, index);
     }
 
@@ -101,11 +101,9 @@ public class PhotoReviewScreen : ScreenBase
 
     public void CleanPhotosContainer()
     {
-        foreach (Transform child in _photosContainer)
-        {
-            Destroy(child.gameObject);
-        }
-        _capturedPhotos = new List<Texture2D>();
+        foreach (var thumbnail in _thumbnails) Destroy(thumbnail);
+        _thumbnails.Clear();
+        GlobalChosesDataContainer.Instance.ClearPhotos();
         _canSelect = false;
         _selectedPhotoIndices = new List<int>();
     }
@@ -114,7 +112,7 @@ public class PhotoReviewScreen : ScreenBase
     {
         if (_selectedPhotoIndices.Count == 0) return;
         _canSelect = false;
-        var selectedPhotos = _capturedPhotos.Where(photo => _selectedPhotoIndices.Contains(_capturedPhotos.IndexOf(photo)));
+        var selectedPhotos = CapturedPhotos.Where(photo => _selectedPhotoIndices.Contains(CapturedPhotos.IndexOf(photo)));
         GlobalChosesDataContainer.Instance.SelectedPhotos = selectedPhotos.ToList();
         ScreenManager.Instance.GetScreen<QrCodeScreen>().SetSelectedPhotos(selectedPhotos.ToList());
         _canSelect = true;
@@ -125,7 +123,7 @@ public class PhotoReviewScreen : ScreenBase
     private void OnBackPressed()
     {
         GlobalChosesDataContainer.Instance.SelectedPhotos = new List<Texture2D>();
-        GlobalChosesDataContainer.Instance.Photos = new List<Texture2D>();
+
         if (!TESTMODE)
             _loader.CleanFolder();
         //ScreenManager.Instance.ShowPreviousScreen();

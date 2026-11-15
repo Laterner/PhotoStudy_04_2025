@@ -1,48 +1,79 @@
-using System.Threading.Tasks;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using Unity.Collections;
 using UnityEngine;
 
 public static class TextureConverter
 {
-    /// <summary>
-    /// Конвертирует Texture2D в Sprite
-    /// </summary>
-    /// <param name="texture">Исходная текстура</param>
-    /// <param name="pivot">Точка пивота (по умолчанию центр)</param>
-    /// <param name="pixelsPerUnit">Пикселей на юнит (100 для 2D)</param>
-    /// <param name="meshType">Тип меша (FullRect для простых спрайтов)</param>
-    /// <returns>Созданный спрайт</returns>
-    public static Sprite ConvertTextureToSprite(Texture2D texture, 
-                                             Vector2? pivot = null, 
-                                             float pixelsPerUnit = 100.0f, 
-                                             SpriteMeshType meshType = SpriteMeshType.FullRect)
+    private static readonly Dictionary<Texture2D, Sprite> Sprites = new Dictionary<Texture2D, Sprite>();
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetCache()
     {
-        if (texture == null)
-        {
-            Debug.LogError("Texture is null! Cannot convert to sprite.");
-            return null;
-        }
-
-        // Используем стандартный пивот (центр) если не указан
-        Vector2 actualPivot = pivot ?? new Vector2(0.5f, 0.5f);
-        
-        // Создаем спрайт
-        Sprite sprite = Sprite.Create(
-            texture,
-            new Rect(0, 0, texture.width, texture.height),
-            actualPivot,
-            pixelsPerUnit,
-            0,  // extrude (не используется в FullRect)
-            meshType
-        );
-
+        foreach (var sprite in Sprites.Values)
+            if (sprite != null) Object.Destroy(sprite);
+        Sprites.Clear();
+    }
+    public static Sprite ConvertTextureToSprite(Texture2D texture, Vector2? pivot = null,
+        float pixelsPerUnit = 100f, SpriteMeshType meshType = SpriteMeshType.FullRect)
+    {
+        if (texture == null) return null;
+        if (Sprites.TryGetValue(texture, out var sprite) && sprite != null) return sprite;
+        sprite = Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height),
+            pivot ?? new Vector2(0.5f, 0.5f), pixelsPerUnit, 0, meshType);
+        Sprites[texture] = sprite;
         return sprite;
     }
-
-    /// <summary>
-    /// Асинхронная версия с обработкой в другом потоке
-    /// </summary>
-    public static async Task<Sprite> ConvertTextureToSpriteAsync(Texture2D texture)
+    public static void DestroyTexture(Texture2D texture)
     {
-        return await Task.Run(() => ConvertTextureToSprite(texture));
+        if (ReferenceEquals(texture, null)) return;
+        if (Sprites.TryGetValue(texture, out var sprite))
+        {
+            Sprites.Remove(texture);
+            if (sprite != null) Object.Destroy(sprite);
+        }
+        if (texture != null) Object.Destroy(texture);
+    }
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    private struct Rgb24 { public byte R, G, B; }
+    private static void RotatePixels<T>(NativeArray<T> source, NativeArray<T> destination,
+        int width, int height) where T : struct
+    {
+        int i = 0;
+        for (int x = 0; x < width; x++)
+            for (int y = height - 1; y >= 0; y--)
+                destination[i++] = source[x + y * width];
+    }
+    public static Texture2D RotateTexture(Texture2D source)
+    {
+        bool rawFormat = source.format == TextureFormat.RGB24 || source.format == TextureFormat.RGBA32 ||
+            source.format == TextureFormat.ARGB32 || source.format == TextureFormat.BGRA32;
+        var result = new Texture2D(source.height, source.width,
+            rawFormat ? source.format : TextureFormat.RGBA32, true);
+        try
+        {
+            switch (source.format)
+            {
+                case TextureFormat.RGB24:
+                    RotatePixels(source.GetPixelData<Rgb24>(0), result.GetPixelData<Rgb24>(0), source.width, source.height);
+                    break;
+                case TextureFormat.RGBA32:
+                case TextureFormat.ARGB32:
+                case TextureFormat.BGRA32:
+                    RotatePixels(source.GetPixelData<uint>(0), result.GetPixelData<uint>(0), source.width, source.height);
+                    break;
+                default:
+                    var pixels = source.GetPixels32();
+                    var rotated = new Color32[pixels.Length];
+                    int i = 0;
+                    for (int x = 0; x < source.width; x++)
+                        for (int y = source.height - 1; y >= 0; y--)
+                            rotated[i++] = pixels[x + y * source.width];
+                    result.SetPixels32(rotated);
+                    break;
+            }
+            result.Apply(true);
+            return result;
+        }
+        catch { DestroyTexture(result); throw; }
     }
 }

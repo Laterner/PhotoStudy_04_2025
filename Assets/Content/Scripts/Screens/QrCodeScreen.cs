@@ -16,8 +16,6 @@ public class QrCodeScreen : ScreenBase
     [SerializeField] private Image _qrCodeImage;
     [SerializeField] private CanvasGroup _qrCodeImagePreloaderCG;
     private List<Texture2D> _selectedPhotos = new List<Texture2D>();
-    [SerializeField] private CanvasGroup _canvasGroup;
-    [SerializeField] private float _fadeDuration = 0.8f;
     private bool _photosDownloaded;
 
     public void SetSelectedPhotos(List<Texture2D> selectedPhotos)
@@ -42,10 +40,10 @@ public class QrCodeScreen : ScreenBase
         yield return AnimateFadeOut(_canvasGroup, _fadeDuration);
     }
 
-    public async Task setupQr(Texture2D tex)
+    public void setupQr(Texture2D tex)
     {
         _qrCodeImage.sprite = TextureConverter.ConvertTextureToSprite(tex);
-        await Task.Yield();
+
         _qrCodeImagePreloaderCG.DOFade(0, 1);
         _photosDownloaded = true;
     }
@@ -72,7 +70,7 @@ public class QrCodeScreen : ScreenBase
         _photosDownloaded = false;
         _qrCodeImage.sprite = null;
         _qrCodeImagePreloaderCG.DOFade(1, 0);
-        _loader.UploadSelectedPhotosToDisk(_selectedPhotos.ToArray(), true);
+        _loader.UploadSelectedPhotosToDisk(_selectedPhotos.ToArray());
     }
 
 
@@ -90,8 +88,8 @@ public class QrCodeScreen : ScreenBase
 
     private void OnMainScreenPressed()
     {
-        _loader.CleanFolder();
-        ScreenManager.Instance.StartScreens();
+
+        ScreenManager.Instance.ResetSession();
         // ScreenManager.Instance.ShowScreen<ScreensaverScreen>();
     }
 

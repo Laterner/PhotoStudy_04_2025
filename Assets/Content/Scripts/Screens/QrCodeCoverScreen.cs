@@ -18,8 +18,6 @@ public class QrCodeCoverScreen : ScreenBase
     [SerializeField] private CanvasGroup _qrCodeImagePreloaderCG, _posterImagePreloaderCG;
     [SerializeField] private Image _qrCodeImage;
     private List<Texture2D> _selectedPhotos = new List<Texture2D>();
-    [SerializeField] private CanvasGroup _canvasGroup;
-    [SerializeField] private float _fadeDuration = 0.8f;
     private bool _photosDownloaded;
     private bool _canUpload;
     public Image diskAvaliableIcon;
@@ -59,34 +57,44 @@ public class QrCodeCoverScreen : ScreenBase
         yield return AnimateFadeOut(_canvasGroup, _fadeDuration);
     }
 
-    public async Task setupQr(Texture2D tex)
+    public void setupQr(Texture2D tex)
     {
         _qrCodeImage.sprite = TextureConverter.ConvertTextureToSprite(tex);
-        await Task.Yield();
+
         _qrCodeImagePreloaderCG.DOFade(0, 1);
-        await Task.Yield();
+
         _posterImagePreloaderCG.DOFade(0, 1);
-        await Task.Yield();
+
         _posterImage.GetComponent<CanvasGroup>().DOFade(1, 1);
 
         _photosDownloaded = true; ;
     }
     private async void PreparePhotos()
     {
+        int session = GlobalChosesDataContainer.Instance.SessionId;
         _photosDownloaded = false;
         _qrCodeImage.sprite = null;
+        _posterImage.sprite = null;
         _posterImage.GetComponent<CanvasGroup>().DOFade(0, 0);
         _qrCodeImagePreloaderCG.DOFade(1, 0);
         _posterImagePreloaderCG.DOFade(1, 0);
-        // _loader.CaptureAreaAndSave(_posterImage.rectTransform, _loader.GetFilePath(), DateTime.Now.ToSafeString().Replace(" ", "").Replace(":", "").Replace(".", "").Replace("_", ""));
         while (!_loader.posterCreationFinished)
         {
-            await Task.Delay(500);
+            await Task.Delay(100);
+            if (session != GlobalChosesDataContainer.Instance.SessionId) return;
         }
-        await _loader.UploadSelectedPhotosToDisk(new Texture2D[1] { GlobalChosesDataContainer.Instance.Poster }, true, true);
-        _loader.TryUploadPhotosToFlashDisk();
+        var poster = GlobalChosesDataContainer.Instance.Poster;
+        if (poster == null)
+        {
+            _photosDownloaded = true;
+            return;
+        }
+        _posterImage.sprite = TextureConverter.ConvertTextureToSprite(poster);
+        bool uploaded = await _loader.UploadSelectedPhotosToDisk(new[] { poster }, true);
+        if (session != GlobalChosesDataContainer.Instance.SessionId) return;
+        _photosDownloaded = true;
+        if (uploaded) _loader.TryUploadPhotosToFlashDisk();
     }
-
     private void OnCheckDisksPressed()
     {
         if (!_photosDownloaded)
@@ -109,9 +117,9 @@ public class QrCodeCoverScreen : ScreenBase
         {
             return;
         }
-        _loader.CleanFolder();
-        ScreenManager.Instance.StartScreens();
-        _loader.StartMonitoring();
+
+        ScreenManager.Instance.ResetSession();
+
         // ScreenManager.Instance.ShowScreen<ScreensaverScreen>();
     }
 

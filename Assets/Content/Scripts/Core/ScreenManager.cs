@@ -98,7 +98,7 @@ public class ScreenManager : MonoBehaviour
 
     public T GetScreen<T>() where T : ScreenBase
     {
-        Debug.Log(typeof(T));
+
         if (_screens.TryGetValue(typeof(T), out ScreenBase screen))
         {
             return (T)screen;
@@ -106,55 +106,95 @@ public class ScreenManager : MonoBehaviour
         return null;
     }
 
+    private ScreenBase _transitionTarget;
+    private ScreenBase _pendingScreen;
+    private Action _pendingCompletion;
+
     public void ShowScreen<T>(Action onComplete = null) where T : ScreenBase
     {
-        if (_isTransitioning) return;
-        if (typeof(T) == _initialScreen.GetType())
+        if (_screens.TryGetValue(typeof(T), out var screen)) RequestScreen(screen, onComplete);
+        else Debug.LogError($"Screen of type {typeof(T)} not found!");
+    }
+
+    private void RequestScreen(ScreenBase screen, Action onComplete)
+    {
+        if (_isTransitioning)
         {
-            _canCount = false;
-            _currentTimer = 0;
+            _pendingScreen = screen == _transitionTarget ? null : screen;
+            _pendingCompletion = _pendingScreen == null ? null : onComplete;
+            return;
         }
-        else
-        {
-            _canCount = true;
-        }
-        if (_screens.TryGetValue(typeof(T), out ScreenBase screen))
-        {
-            StartCoroutine(TransitionToScreen(screen, onComplete));
-        }
-        else
-        {
-            Debug.LogError($"Screen of type {typeof(T)} not found!");
-        }
+        StartCoroutine(TransitionToScreen(screen, onComplete));
     }
 
     private IEnumerator TransitionToScreen(ScreenBase newScreen, Action onComplete)
     {
         _isTransitioning = true;
-
-        if (_currentScreen != null)
+        try
         {
-            _previousScreen = _currentScreen;
-            yield return StartCoroutine(_currentScreen.AnimateHide());
-            _currentScreen.gameObject.SetActive(false);
+            while (newScreen != null)
+            {
+                _transitionTarget = newScreen;
+                _canCount = newScreen != _initialScreen;
+                _currentTimer = 0;
+                if (_currentScreen != null)
+                {
+                    _previousScreen = _currentScreen;
+                    _currentScreen.SetInputEnabled(false);
+                    yield return Guarded(_currentScreen.AnimateHide());
+                    _currentScreen.gameObject.SetActive(false);
+                }
+                _currentScreen = newScreen;
+                _currentScreen.gameObject.SetActive(true);
+                _currentScreen.SetInputEnabled(_currentScreen.InteractableWhileShowing);
+                yield return Guarded(_currentScreen.AnimateShow());
+                _currentScreen.SetInputEnabled(true);
+                try { onComplete?.Invoke(); }
+                catch (Exception e) { Debug.LogException(e); }
+                newScreen = _pendingScreen;
+                onComplete = _pendingCompletion;
+                _pendingScreen = null;
+                _pendingCompletion = null;
+            }
         }
+        finally
+        {
+            _isTransitioning = false;
+            _transitionTarget = null;
+            if (_currentScreen != null) _currentScreen.SetInputEnabled(true);
+        }
+    }
 
-        _currentScreen = newScreen;
-        _currentScreen.gameObject.SetActive(true);
-        yield return StartCoroutine(_currentScreen.AnimateShow());
-
-        _isTransitioning = false;
-        onComplete?.Invoke();
+    private static IEnumerator Guarded(IEnumerator routine)
+    {
+        try
+        {
+            while (true)
+            {
+                object current = null;
+                bool hasNext;
+                try
+                {
+                    hasNext = routine.MoveNext();
+                    if (hasNext) current = routine.Current;
+                }
+                catch (Exception e)
+                {
+                    Debug.LogException(e);
+                    hasNext = false;
+                }
+                if (!hasNext) yield break;
+                if (current is IEnumerator nested) yield return Guarded(nested);
+                else yield return current;
+            }
+        }
+        finally { (routine as IDisposable)?.Dispose(); }
     }
 
     public void ShowPreviousScreen()
     {
-        if (_previousScreen != null && !_isTransitioning)
-        {
-            StartCoroutine(TransitionToScreen(_previousScreen, null));
-        }
+        if (_previousScreen != null) RequestScreen(_previousScreen, null);
     }
-
     public void EnableError()
     {
         _networkError.SetActive(true);
@@ -172,7 +212,7 @@ public class ScreenManager : MonoBehaviour
         }
         if (_currentTimer >= _activityTimer)
         {
-            resetScreens();
+            ResetSession();
         }
         if (Input.GetMouseButtonDown(0) || (Input.touchCount > 0 && Input.GetTouch(0).phase == TouchPhase.Began))
         {
@@ -180,11 +220,11 @@ public class ScreenManager : MonoBehaviour
         }
     }
 
-    private void resetScreens()
+    public void ResetSession()
     {
         _currentTimer = 0;
         _loader.CleanFolder();
-        StartScreens();
+        ShowScreen<ScreensaverScreen>();
         _loader.StartMonitoring();
     }
 }

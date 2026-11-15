@@ -36,8 +36,6 @@ public class LightingModeSelectionScreen : ScreenBase
     [SerializeField] private Button _backButton;
     [SerializeField] private List<Sprite> _lightModeScreenSprite;
     [SerializeField] private List<LightingSchemeData> _lightingModes;
-    [SerializeField] private CanvasGroup _canvasGroup;
-    [SerializeField] private float _fadeDuration = 0.8f;
     [SerializeField] private string lightAppAddress = "http://127.0.0.1:8080";
     private int _selectedIndex = 0;
 
@@ -139,26 +137,17 @@ public class LightingModeSelectionScreen : ScreenBase
 
     private async void setLight(int index)
     {
-        using (UnityWebRequest uwr = UnityWebRequest.Get(lightAppAddress + $"/preset?id={index}"))
+        try
         {
-            uwr.SendWebRequest();
-            while (!uwr.isDone)
+            using (var uwr = UnityWebRequest.Get(lightAppAddress + $"/preset?id={index}"))
             {
-                await Task.Yield();
-            }
-
-            if (uwr.result != UnityWebRequest.Result.Success)
-            {
-                Debug.Log(uwr.error);
-                return;
-            }
-            else
-            {
-                return;
+                uwr.timeout = 10;
+                await uwr.SendWebRequest();
+                if (uwr.result != UnityWebRequest.Result.Success) Debug.LogWarning(uwr.error);
             }
         }
+        catch (System.Exception e) { Debug.LogWarning(e.Message); }
     }
-
     private void OnBackPressed()
     {
         //ScreenManager.Instance.ShowPreviousScreen();

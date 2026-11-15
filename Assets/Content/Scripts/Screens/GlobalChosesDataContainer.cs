@@ -7,11 +7,11 @@ public class GlobalChosesDataContainer : MonoBehaviour
     public static GlobalChosesDataContainer Instance { get; private set; }
     public ShootingModeSelectionScreen.ShootingMode ShootingMode { get; set; }
     public LightingSchemeData LightingMode { get; set; }
-    public List<Texture2D> Photos { get; set; }
-    public List<Texture2D> SelectedPhotos { get; set; }
-    public Texture2D QrCodePhotos { get; set; }
-    public Texture2D Poster { get; set; }
-    public Texture2D QrCodePoster { get; set; }
+    public List<Texture2D> Photos { get; } = new List<Texture2D>();
+    public List<Texture2D> SelectedPhotos { get; set; } = new List<Texture2D>();
+    public Texture2D QrCode { get; private set; }
+    public Texture2D Poster { get; private set; }
+    public int SessionId { get; private set; }
     public string CurrentFolderName = "";
     public string Name { get; set; } = "";
     public string Surname { get; set; } = "";
@@ -30,13 +30,30 @@ public class GlobalChosesDataContainer : MonoBehaviour
         Instance = this;
         DontDestroyOnLoad(gameObject);
     }
+    public void ClearPhotos()
+    {
+        foreach (var photo in Photos) TextureConverter.DestroyTexture(photo);
+        Photos.Clear();
+        SelectedPhotos.Clear();
+    }
+    public void SetPoster(Texture2D texture)
+    {
+        if (Poster == texture) return;
+        TextureConverter.DestroyTexture(Poster);
+        Poster = texture;
+    }
+    public void SetQrCode(Texture2D texture)
+    {
+        if (QrCode == texture) return;
+        TextureConverter.DestroyTexture(QrCode);
+        QrCode = texture;
+    }
     public void Clean()
     {
-        Photos = new List<Texture2D>();
-        SelectedPhotos = new List<Texture2D>();
-        QrCodePhotos = new Texture2D(256, 256, TextureFormat.ARGB32, false);
-        QrCodePoster = new Texture2D(256, 256, TextureFormat.ARGB32, false);
-        Poster = new Texture2D(509, 720, TextureFormat.ARGB32, false);
+        SessionId++;
+        ClearPhotos();
+        SetPoster(null);
+        SetQrCode(null);
         Name = "";
         Surname = "";
         CurrentFolderName = "";

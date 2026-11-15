@@ -8,7 +8,6 @@ using System.Linq;
 
 public class PhotoCaptureScreen : ScreenBase
 {
-    [SerializeField] private CanvasGroup _canvasGroup;
     [SerializeField] private Text _countdownText;
     [SerializeField] private Button _backButton;
     [SerializeField] private Button _captureButton;
@@ -18,7 +17,6 @@ public class PhotoCaptureScreen : ScreenBase
     [SerializeField] private float _countdownDuration = 10f;
     [SerializeField] private int _photosToTake = 8;
     [SerializeField] private float _photoInterval = 0.5f;
-    [SerializeField] private float _fadeDuration = 0.8f;
     [SerializeField] private string cameraAppAddress = "http://127.0.0.1:8080";
     [SerializeField] private string cameraAppShotCount = "12";
 
@@ -74,10 +72,13 @@ public class PhotoCaptureScreen : ScreenBase
     {
         if (!_isCapturing)
         {
+            _isCapturing = true;
+            _loader.StopMonitoring();
             _loader.CleanFolder();
-            _loader.CleanProcessedFiles();
-            _loader.StartMonitoring();
+
+
             ScreenManager.Instance.GetScreen<PhotoReviewScreen>().CleanPhotosContainer();
+            _loader.StartMonitoring();
             _captureRoutine = StartCoroutine(CaptureRoutine());
         }
     }
@@ -98,55 +99,40 @@ public class PhotoCaptureScreen : ScreenBase
             }
         }
 
-        _shotingStarted = false;
-        pushCommandToShot();
-        yield return new WaitUntil(() => _shotingStarted == true);
-        // for (int i = 0; i < _photosToTake; i++)
-        // {
-        //     TakePhoto();
-        //     yield return new WaitForSeconds(_photoInterval);
-        // }
-
-        ScreenManager.Instance.ShowScreen<PhotoReviewScreen>();
-        _isCapturing = false;
-    }
-
-    private void TakePhoto()
-    {
-        Debug.Log("Photo taken!");
-    }
-
-    private async void pushCommandToShot()
-    {
-#if UNITY_EDITOR
-        _shotingStarted = true;
-        return;
-#endif
-
-        using (UnityWebRequest uwr = UnityWebRequest.Get(cameraAppAddress + $"/camera?action=multishot&count={cameraAppShotCount}"))
+#if !UNITY_EDITOR
+        UnityWebRequestAsyncOperation operation = null;
+        try
         {
-            uwr.SendWebRequest();
-            while (!uwr.isDone)
-            {
-                await Task.Yield();
-            }
-
-            if (uwr.result != UnityWebRequest.Result.Success)
-            {
-                Debug.Log(uwr.error);
-                ScreenManager.Instance.EnableError();
-                return;
-            }
-            else
-            {
-                _shotingStarted = true;
-                return;
-            }
+            _captureRequest = UnityWebRequest.Get(cameraAppAddress + $"/camera?action=multishot&count={cameraAppShotCount}");
+            _captureRequest.timeout = 30;
+            operation = _captureRequest.SendWebRequest();
         }
+        catch (System.Exception e) { Debug.LogWarning(e.Message); }
+        if (operation != null) yield return operation;
+        bool success = operation != null && _captureRequest != null &&
+            _captureRequest.result == UnityWebRequest.Result.Success;
+        DisposeCaptureRequest();
+        if (!success)
+        {
+            _countdownText.gameObject.SetActive(false);
+            _isCapturing = false;
+            ScreenManager.Instance.EnableError();
+            yield break;
+        }
+#endif
+        ScreenManager.Instance.ShowScreen<PhotoReviewScreen>();
     }
 
+    private UnityWebRequest _captureRequest;
+    private void DisposeCaptureRequest()
+    {
+        _captureRequest?.Dispose();
+        _captureRequest = null;
+    }
+    private void OnDisable() { DisposeCaptureRequest(); }
     private void OnBackPressed()
     {
+        DisposeCaptureRequest();
         if (_isCapturing)
         {
             if (_captureRoutine != null)

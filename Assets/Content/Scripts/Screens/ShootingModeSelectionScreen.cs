@@ -4,10 +4,8 @@ using System.Collections;
 
 public class ShootingModeSelectionScreen : ScreenBase
 {
-    [SerializeField] private CanvasGroup _canvasGroup;
     [SerializeField] private Button _singleParticipantBtn;
     [SerializeField] private Button _twoParticipantsBtn;
-    [SerializeField] private float _fadeDuration = 0.8f;
     [SerializeField] private Animator _transitionAnimator;
 
     [SerializeField] private Button _backButton;

@@ -22,6 +22,7 @@ public class MakeCoverScreen : ScreenBase
     [SerializeField] private Button _backButton;
     [SerializeField] private Loader _loader;
     private bool _canSelect;
+    private readonly List<GameObject> _thumbnails = new List<GameObject>();
     private bool _photosLoaded;
 
     [SerializeField] private string _cloudFolderTemplate = "https://cloud.example.com/user1234/";
@@ -30,11 +31,10 @@ public class MakeCoverScreen : ScreenBase
     private List<int> _selectedPhotoIndices = new List<int>();
     private string _cloudFolderUrl;
 
-    [SerializeField] private CanvasGroup _canvasGroup;
 
     [Header("Settings")]
-    [SerializeField] private float _fadeDuration = 0.8f;
 
+    public override bool InteractableWhileShowing => false;
     public override void Initialize()
     {
         _canSelect = false;
@@ -56,6 +56,7 @@ public class MakeCoverScreen : ScreenBase
                 Destroy(child.gameObject);
             }
             yield return new WaitUntil(() => _photosContainer.childCount < 1);
+            _thumbnails.Clear();
             _loader.OnNewPhotoLoaded -= LoadCapturedPhotos;
             _loader.OnNewPhotoLoaded += LoadCapturedPhotos;
             _loader.StartMonitoring();
@@ -79,12 +80,13 @@ public class MakeCoverScreen : ScreenBase
         _posterImage.transform.Find("Text").GetComponent<Text>().lineSpacing = _fontLineSpacing[GlobalChosesDataContainer.Instance.SelectedCategory];
         yield return new WaitForEndOfFrame();
 
-        TogglePhotoSelection(0);
+        if (_capturedPhotos.Count > 0) TogglePhotoSelection(0);
         yield return new WaitForEndOfFrame();
         yield return AnimateFadeIn(_posterImage.gameObject.GetComponent<CanvasGroup>(), _fadeDuration);
     }
     public override IEnumerator AnimateHide()
     {
+        _loader.OnNewPhotoLoaded -= LoadCapturedPhotos;
         yield return AnimateFadeOut(_canvasGroup, _fadeDuration);
     }
 
@@ -92,7 +94,7 @@ public class MakeCoverScreen : ScreenBase
     {
         _capturedPhotos.Add(tex);
         Debug.Log(_capturedPhotos.Count);
-        GlobalChosesDataContainer.Instance.Photos = _capturedPhotos.ToList();
+
         DisplayOnePhoto(tex, _capturedPhotos.Count - 1);
         if (_capturedPhotos.Count > 0)
         {
@@ -103,6 +105,7 @@ public class MakeCoverScreen : ScreenBase
     private void DisplayOnePhoto(Texture2D tex, int index)
     {
         var photoObj = Instantiate(_photoPrefab, _photosContainer);
+            _thumbnails.Add(photoObj);
         var image = photoObj.transform.Find("Photo").GetComponent<Image>();
         var button = photoObj.GetComponent<Button>();
 
@@ -112,13 +115,9 @@ public class MakeCoverScreen : ScreenBase
 
         UpdatePhotoSelectionVisual(photoObj, index);
     }
-    private async void LoadCapturedPhotos()
-    {
-        _capturedPhotos = await _loader.CheckForExistingPhotos();
-        _photosLoaded = true;
-    }
     private void DisplayPhotos()
     {
+        _thumbnails.Clear();
         foreach (Transform child in _photosContainer)
         {
             Destroy(child.gameObject);
@@ -128,6 +127,7 @@ public class MakeCoverScreen : ScreenBase
         {
             int index = i;
             var photoObj = Instantiate(_photoPrefab, _photosContainer);
+            _thumbnails.Add(photoObj);
             var image = photoObj.transform.Find("Photo").GetComponent<Image>();
             var button = photoObj.GetComponent<Button>();
 
@@ -145,11 +145,11 @@ public class MakeCoverScreen : ScreenBase
         {
             return;
         }
-        var photoObj = _photosContainer.GetChild(index).gameObject;
-        for (int i = 0; i < _photosContainer.childCount; i++)
+        var photoObj = _thumbnails[index];
+        for (int i = 0; i < _thumbnails.Count; i++)
         {
             var indexTiUnselect = i;
-            var unselect = _photosContainer.GetChild(indexTiUnselect).gameObject;
+            var unselect = _thumbnails[indexTiUnselect];
             _selectedPhotoIndices.Remove(indexTiUnselect);
             UpdatePhotoSelectionVisual(unselect, indexTiUnselect);
         }
@@ -174,15 +174,17 @@ public class MakeCoverScreen : ScreenBase
 
     private async void OnNextPressed()
     {
+        int session = GlobalChosesDataContainer.Instance.SessionId;
         Vector2 screenPos = RectTransformUtility.WorldToScreenPoint(
                Camera.main,
                _posterImage.transform.position
            );
 
-        // здесь начинаем работу
+        // пїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ пїЅпїЅпїЅпїЅпїЅпїЅ
         Vector2 size = _posterImage.rectTransform.rect.size;
         _loader.CaptureAreaAndSave(_posterImage.rectTransform, _loader.GetFilePath(), DateTime.Now.ToSafeString().Replace(" ", "").Replace(":", "").Replace(".", "").Replace("_", ""));
          await Task.Delay(1000);
+        if (session != GlobalChosesDataContainer.Instance.SessionId) return;
         // await _loader.UploadSelectedPhotosToDisk(new Texture2D[1] { GlobalChosesDataContainer.Instance.Poster }, true, true);
         ScreenManager.Instance.ShowScreen<QrCodeCoverScreen>();
     }

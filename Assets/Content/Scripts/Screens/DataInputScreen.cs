@@ -27,8 +27,6 @@ public class DataInputScreen : ScreenBase
     private string _currentSurname = "";
     [SerializeField] private Button _nextButton;
     [SerializeField] private Button _mainMenuButton;
-    [SerializeField] private CanvasGroup _canvasGroup;
-    [SerializeField] private float _fadeDuration = 0.8f;
 
     public override void Initialize()
     {
@@ -51,7 +49,7 @@ public class DataInputScreen : ScreenBase
     {
         _keyboard.OnKeyPressed += HandleKeyPress;
         _keyboard.OnBackspacePressed += HandleBackspace;
-        _keyboard.OnSpacePressed += HandleSpace;
+
     }
 
     private void ActivateNameField()
@@ -196,7 +194,7 @@ public class DataInputScreen : ScreenBase
     {
         GlobalChosesDataContainer.Instance.Name = "";
         GlobalChosesDataContainer.Instance.Surname = "";
-        ScreenManager.Instance.StartScreens();
+        ScreenManager.Instance.ResetSession();
         // ScreenManager.Instance.ShowScreen<ScreensaverScreen>();
     }
 }

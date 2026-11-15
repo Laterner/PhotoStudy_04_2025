@@ -58,49 +58,44 @@ public class QrGeneratorOnline : MonoBehaviour
 
     public void UploadPhotoLink(string photoUrl, System.Action<ApiResponse> callback = null)
     {
-        Debug.Log(API_URL+ AUTH_TOKEN);
+
         StartCoroutine(UploadPhotoLinkCoroutine(photoUrl, callback));
     }
 
-    private IEnumerator UploadPhotoLinkCoroutine(string photoUrl, System.Action<ApiResponse> callback)
+    public IEnumerator UploadPhotoLinkCoroutine(string photoUrl, System.Action<ApiResponse> callback)
     {
-        WWWForm form = new WWWForm();
-        form.AddField("link", photoUrl);
-
-        using (UnityWebRequest request = UnityWebRequest.Post(API_URL, form))
+        ApiResponse response = null;
+        UnityWebRequest request = null;
+        try
         {
+            var form = new WWWForm();
+            form.AddField("link", photoUrl);
+            request = UnityWebRequest.Post(API_URL, form);
+            request.timeout = 30;
             request.SetRequestHeader("accept", "application/json");
             request.SetRequestHeader("X-Upload-Token", AUTH_TOKEN);
-
-
-            yield return request.SendWebRequest();
-
-            if (request.result != UnityWebRequest.Result.Success)
+        }
+        catch (Exception e) { Debug.LogWarning(e.Message); }
+        try
+        {
+            if (request != null)
             {
-                Debug.LogError($"Ошибка: {request.error}");
-                Debug.LogError($"Ответ: {request.downloadHandler.text}");
-                callback?.Invoke(null);
-                yield break;
+                UnityWebRequestAsyncOperation operation = null;
+                try { operation = request.SendWebRequest(); }
+                catch (Exception e) { Debug.LogWarning(e.Message); }
+                if (operation != null) yield return operation;
+                try
+                {
+                    if (operation != null && request.result == UnityWebRequest.Result.Success)
+                        response = JsonUtility.FromJson<ApiResponse>(request.downloadHandler.text);
+                }
+                catch (Exception e) { Debug.LogWarning("Invalid QR response: " + e.Message); }
             }
-
-            ApiResponse response = JsonUtility.FromJson<ApiResponse>(request.downloadHandler.text);
-
-            if (!response.success)
-            {
-                Debug.LogError("Сервер вернул success=false");
-                callback?.Invoke(response);
-                yield break;
-            }
-
-            if (!string.IsNullOrEmpty(response.data.link.qr))
-            {
-
-                callback?.Invoke(response);
-            }
-            else
-            {
-                callback?.Invoke(null);
-            }
+        }
+        finally
+        {
+            request?.Dispose();
+            callback?.Invoke(response);
         }
     }
 }

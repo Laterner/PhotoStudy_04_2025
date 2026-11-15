@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PhotoStudy — исправление утечек памяти</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;color:#203044;background:#f5f7fb;margin:0}
+main{max-width:1100px;margin:auto;padding:40px 24px}h1,h2{line-height:1.25}h2{margin-top:36px}
+table{width:100%;border-collapse:collapse;background:white}th,td{padding:12px;text-align:left;border:1px solid #dce2ec;vertical-align:top}
+code{font-size:.9em;overflow-wrap:anywhere}a{color:#175ac0}.status{padding:18px;background:#e5f2e9;border-left:4px solid #388454}
+li{margin:7px 0}small{color:#526175}
+</style>
+</head>
+<body><main>
+<h1>Исправление утечек памяти и переходов экранов</h1>
+<p><small>15 ноября 2026 · Unity 6000.0.62f1 · задание: <a href="CODEX_FIX_INSTRUCTIONS.md">CODEX_FIX_INSTRUCTIONS.md</a></small></p>
+<p class="status">Изменены 19 файлов C#. Устранены описанные пути потери текстур и спрайтов, бесконечные ожидания ошибок загрузки и потеря запроса перехода. Компиляция средствами установленного Unity завершилась без ошибок C# в двух конфигурациях. Стабильность памяти в работающем киоске ещё требует проверки Memory Profiler.</p>
+
+<h2>Дополнение: ошибка SetPixelData после выбора фото</h2><p>Исправлено наложение рамки в Loader.BlendTexturesAsync: вместо интерпретации сырых RGB24-данных (вместе с мип-уровнями) как Color32 используется GetPixels32(0) для фото и рамки. Массив результата содержит ровно width × height элементов; размеры обоих входных массивов проверяются. Это устраняет недостаточный размер источника SetPixelData и неверную интерпретацию каналов. Мип-уровни исходных фото сохранены; чтение фото через RenderTexture не добавлялось. Проверка на реальных фото в приложении остаётся необходимой.</p><h2>Выполнение пунктов задания</h2>
+<table><thead><tr><th>Пункт</th><th>Результат</th></tr></thead><tbody>
+<tr><td>1. Исходник после поворота</td><td>Исходная текстура уничтожается после поворота, при ошибке чтения или LoadImage=false. Незавершённые файлы повторно читаются; предупреждение выводится один раз на файл за цикл мониторинга.</td></tr>
+<tr><td>2. Фото предыдущих съёмок</td><td>Единственный владелец — Photos контейнера. ClearPhotos уничтожает текстуры и очищает выбранные фото. Перед съёмкой и сбросом удаляются миниатюры. Их индексация теперь использует собственные списки, независимо от отложенного Destroy.</td></tr>
+<tr><td>3. Постер</td><td>SetPoster уничтожает предыдущее значение. Захват выполняется в конце текущего кадра, синхронная часть защищена try/catch; временные текстуры освобождаются в finally. Ошибка даёт null и завершённый флаг. RenderTexture.active восстанавливается до освобождения временного буфера.</td></tr>
+<tr><td>4. Заглушки</td><td>Создание трёх текстур при Clean удалено. Постер и QR становятся null; экран QR постера допускает отсутствие постера.</td></tr>
+<tr><td>5. QR</td><td>Одна корутина Loader получает ответ сервиса, загружает картинку и при неудаче создаёт локальный QR. Результат передаётся SetQrCode. Ошибка JSON не теряет callback. Удалены вывод токена и неиспользуемая FakeSaveFileToDiskCompleted.</td></tr>
+<tr><td>6. Спрайты</td><td>Кэш Texture2D → Sprite предотвращает повторное создание. DestroyTexture удаляет кэш, спрайт и текстуру; безопасен при null и повторном вызове. Кэш сбрасывается при SubsystemRegistration. Асинхронный Sprite.Create удалён.</td></tr>
+<tr><td>7. HTTP</td><td>Один static readonly HttpClient. HttpRequestMessage и HttpResponseMessage освобождаются через using. Заголовки устанавливаются отдельно для каждого запроса.</td></tr>
+<tr><td>8. Зависшие ожидания</td><td>Флаги опроса заменены результатами Task&lt;bool&gt; и Task&lt;string&gt;. Loader сообщает об ошибке один раз для своей операции, SDK не показывает окна. Кнопка возврата с QR постера доступна после ошибки. Удалены неиспользуемые проверки сети и одиночная загрузка.</td></tr>
+<tr><td>9. Слежение</td><td>CancellationTokenSource отменяет предыдущий цикл; токен передаётся чтению и задержке, проверяется после await. Отменённая операция не отправляет фото и OnAllPhotosLoaded. OnDestroy отменяет мониторинг. Ошибка удаления одного файла не останавливает очистку остальных.</td></tr>
+<tr><td>10. Границы сессии</td><td>SessionId увеличивается в Clean. Длительные операции проверяют его после ожиданий; поздние результаты не обновляют контейнер и экраны. Временные результаты уничтожаются, YDFolderCreated не попадает в новую сессию.</td></tr>
+<tr><td>11. Пиковая память</td><td>Поворот RGB24/RGBA32/ARGB32/BGRA32 копирует напрямую между GetPixelData без двух массивов Color32. RGB24 упакован в три байта, unsafe не используется. Мип-уровни сохранены. Запись постера в папку камеры удалена. Дополнительно освобождается временный результат существующего наложения рамки после сохранения.</td></tr>
+<tr><td>12. Страховка</td><td>После появления заставки выполняется Resources.UnloadUnusedAssets.</td></tr>
+<tr><td>Переходы</td><td>Последний отложенный запрос выполняется после текущего перехода. Повтор целевого экрана сбрасывает отложенный. Таймер меняется при фактическом переходе. Уходящий экран не принимает клики; сборка постера заблокирована до окончания появления. Анимации, включая вложенные IEnumerator, и callback защищены от исключений.</td></tr>
+<tr><td>Камера и остальные экраны</td><td>Запрос камеры выполняется корутиной; ошибка возвращает возможность повторной съёмки. Успех сохраняет блокировку повторного снимка. Запрос освобождается при возврате и OnDisable. Кнопки «На главную» используют ResetSession. Свет остаётся async с timeout=10 и try/catch. Убраны выбор отсутствующего фото и двойная подписка на пробел.</td></tr>
+</tbody></table>
+
+<h2>Изменённые файлы</h2>
+<table><thead><tr><th>Файл</th><th>Изменения</th></tr></thead><tbody>
+<tr><td><a href="Content/Scripts/Core/Loader.cs">Core/Loader.cs</a></td><td>Отмена мониторинга, владение временными текстурами, загрузка с результатами, QR с резервной генерацией, захват постера, проверки сессии, очистка файлов.</td></tr>
+<tr><td><a href="Content/Scripts/Core/ScreenBase.cs">Core/ScreenBase.cs</a></td><td>Общие сериализуемые _canvasGroup и _fadeDuration под прежними именами; управление вводом и InteractableWhileShowing.</td></tr>
+<tr><td><a href="Content/Scripts/Core/ScreenManager.cs">Core/ScreenManager.cs</a></td><td>Очередь из последнего запроса, защищённые анимации, общий ResetSession, таймер и ввод.</td></tr>
+<tr><td><a href="Content/Scripts/Utils/TextureConverter.cs">Utils/TextureConverter.cs</a></td><td>Кэш спрайтов, DestroyTexture, поворот через NativeArray с мип-уровнями.</td></tr>
+<tr><td><a href="Content/Scripts/QR/YandexDiskSDK.cs">QR/YandexDiskSDK.cs</a></td><td>Переиспользование HTTP-клиента, освобождение запросов, результаты вместо флагов, защита сессии. Сохранён существующий способ синхронизации файлов.</td></tr>
+<tr><td><a href="Content/Scripts/QR/QrGeneratorOnline.cs">QR/QrGeneratorOnline.cs</a></td><td>Доступная Loader корутина, ограниченное время запроса, безопасный разбор JSON и callback при неудаче, удаление лога токена.</td></tr>
+<tr><td><a href="Content/Scripts/QR/QRCodeDrawing.cs">QR/QRCodeDrawing.cs</a></td><td>Освобождение текстуры при исключении; весь файл записан в UTF-8 с новыми комментариями.</td></tr>
+<tr><td><a href="Content/Scripts/Screens/GlobalChosesDataContainer.cs">Screens/GlobalChosesDataContainer.cs</a></td><td>Владелец Photos, Poster и QrCode, ClearPhotos, SetPoster, SetQrCode, SessionId, удаление заглушек.</td></tr>
+<tr><td><a href="Content/Scripts/Screens/PhotoReviewScreen.cs">Screens/PhotoReviewScreen.cs</a></td><td>Нет собственного списка фото-владельца; список миниатюр, очистка ресурсов, возврат сохраняет фото до следующей съёмки. Общие поля перенесены в базовый класс.</td></tr>
+<tr><td><a href="Content/Scripts/Screens/PhotoCaptureScreen.cs">Screens/PhotoCaptureScreen.cs</a></td><td>Корутина запроса камеры, восстановление после ошибки, защита повторной съёмки, Dispose; перенос общих полей.</td></tr>
+<tr><td><a href="Content/Scripts/Screens/MakeCoverScreen.cs">Screens/MakeCoverScreen.cs</a></td><td>Ввод после появления, проверка пустого списка, список миниатюр, отсутствие перезаписи владельца фото, отписка при уходе, проверка сессии после задержки; перенос полей.</td></tr>
+<tr><td><a href="Content/Scripts/Screens/QrCodeScreen.cs">Screens/QrCodeScreen.cs</a></td><td>Новая сигнатура загрузки, синхронная установка QR без лишних await, общий сброс; перенос полей.</td></tr>
+<tr><td><a href="Content/Scripts/Screens/QrCodeCoverScreen.cs">Screens/QrCodeCoverScreen.cs</a></td><td>Проверки сессии и null-постера, разблокировка возврата при ошибке, установка QR без await, общий сброс; перенос полей.</td></tr>
+<tr><td><a href="Content/Scripts/Screens/ScreensaverScreen.cs">Screens/ScreensaverScreen.cs</a></td><td>Очистка миниатюр перед Clean, UnloadUnusedAssets после появления; перенос полей.</td></tr>
+<tr><td><a href="Content/Scripts/Screens/LightingModeSelectionScreen.cs">Screens/LightingModeSelectionScreen.cs</a></td><td>Свет: async-ожидание запроса, timeout и try/catch; перенос полей.</td></tr>
+<tr><td><a href="Content/Scripts/Screens/DataInputScreen.cs">Screens/DataInputScreen.cs</a></td><td>Удалена подписка OnSpacePressed, общий сброс; перенос полей.</td></tr>
+<tr><td><a href="Content/Scripts/Screens/CoverCategoryScreen.cs">Screens/CoverCategoryScreen.cs</a></td><td>Общий сброс; перенос полей.</td></tr>
+<tr><td><a href="Content/Scripts/Screens/LightingSchemeInfoScreen.cs">Screens/LightingSchemeInfoScreen.cs</a><br><a href="Content/Scripts/Screens/ShootingModeSelectionScreen.cs">Screens/ShootingModeSelectionScreen.cs</a></td><td>Только перенос _canvasGroup и _fadeDuration в базовый класс.</td></tr>
+</tbody></table>
+
+<h2>Владельцы создаваемых текстур</h2>
+<table><thead><tr><th>Место создания</th><th>Владение и освобождение</th></tr></thead><tbody>
+<tr><td>Loader.LoadTexture: new Texture2D(2, 2)</td><td>До передачи — Loader. После поворота исходник уничтожается. Без поворота передаётся PhotoReviewScreen → контейнер Photos. Ошибка или отмена освобождает локальное значение.</td></tr>
+<tr><td>TextureConverter.RotateTexture: new Texture2D</td><td>Ошибку очищает сам метод. Результат через Loader передаётся Photos; ClearPhotos освобождает его.</td></tr>
+<tr><td>Loader.BlendTexturesAsync: new Texture2D</td><td>Временная текстура UploadSelectedPhotosToDisk. Всегда уничтожается в finally после сохранения или отмены сессии; исключение внутри создания очищается самим методом.</td></tr>
+<tr><td>Loader.ResizeTexture: new Texture2D</td><td>Временная копия overlay у BlendTexturesAsync, уничтожается в finally. Исходный overlay-asset не уничтожается.</td></tr>
+<tr><td>Loader.CaptureUIArea: ScreenCapture.CaptureScreenshotAsTexture и new Texture2D</td><td>Скриншот всегда уничтожается в finally. Обрезанная текстура либо уничтожается после масштабирования, либо передаётся SetPoster.</td></tr>
+<tr><td>Loader.ScaleTexture: new Texture2D</td><td>При ошибке уничтожается локально; успешный результат становится Poster контейнера.</td></tr>
+<tr><td>Loader.CreateQrCode: DownloadHandlerTexture.GetContent</td><td>Локальный результат корутины до SetQrCode; устаревший результат уничтожается в finally. После передачи владелец — контейнер.</td></tr>
+<tr><td>QRCodeDrawing.DrowQRCode: new Texture2D</td><td>Локально очищается при исключении, иначе через CreateQrCode передаётся SetQrCode.</td></tr>
+</tbody></table>
+<p><code>new Texture2D[5]</code> в PhotosContainer создаёт только массив ссылок, а не пять объектов движка. Кэш спрайтов для статических обложек сохраняет ограниченный набор спрайтов между сессиями; сами импортированные текстуры не уничтожаются.</p>
+
+<h2>Проверки</h2>
+<ul>
+<li>Две успешные компиляции Assembly-CSharp компилятором Roslyn из Unity 6000.0.62f1: с UNITY_EDITOR и без символов UNITY_EDITOR* для проверки реальной ветки камеры. Оба процесса завершились с кодом 0, ошибок CS нет. Это проверка C#, не сборка исполняемого приложения.</li>
+<li>Использован существующий response-файл Unity из Library/Bee. Во временной копии исправлен старый абсолютный путь редактора E: на установленный D:, выходные DLL перенаправлены во временный каталог. Проектные файлы сборки не изменены.</li>
+<li>Остаются предупреждения о неиспользуемых полях, async без await, намеренно не ожидаемой фоновой загрузке и устаревшем API стороннего Lean. Ошибок компиляции нет.</li>
+<li>Поиск не находит нестатических new HttpClient(), циклов while (!...) с Task.Yield и отбрасывающего переход if (_isTransitioning) return.</li>
+<li>Проверен diff относительно 161e67b и текущего HEAD. Имена сериализуемых полей сохранены; оба общих поля удалены из всех 11 наследников и добавлены в ScreenBase. Тип _initialScreen уже отличался от 161e67b до этой работы; это не внесённое здесь изменение. Удалённые публичные свойства и методы не являются сериализуемыми полями.</li>
+<li>git diff --check проходит. Изменённые C# записаны с CRLF. Существующие .unity, .prefab, .asset и .meta не менялись; сторонний код, пакеты, настройки Unity и unsafe не менялись. Новых .cs нет.</li>
+<li>Реальные камера, свет, удалённые сервисы, визуальная сериализация сцены и количество объектов в Memory Profiler не проверялись.</li>
+</ul>
+
+<h2>Отклонения и ограничения</h2>
+<ul>
+<li>Текущая версия отличается от описанного коммита: SaveFilesToDisk уже копирует файлы в C:/Pattern/YDFiles для клиента синхронизации Яндекс.Диска. Этот путь сохранён; включать вместо него прямую HTTP-загрузку означало бы менять поведение. Существующий метод прямой загрузки с WebClient.UploadFileTaskAsync сохранён.</li>
+<li>Unity уже открыт с этим проектом. Вместо второго запуска batchmode выполнена компиляция установленным компилятором Unity. Полный импорт, сборка приложения и ручные сценарии остаются владельцу проекта.</li>
+<li>Дополнительно учтены присутствующие в этой версии временные текстуры наложения рамки. Удалены неиспользуемые обходные методы загрузки/чтения текстур, чтобы не оставлять альтернативное владение без очистки.</li>
+<li>Проверки SessionId добавлены также после существующей задержки кнопки «Далее». Установка QR стала синхронной: прежние Task.Yield не выполняли полезной работы и допускали продолжение в новой сессии.</li>
+<li>isDoubleBuild оставлен неизменным при Clean: это сериализуемая настройка варианта приложения, а не состояние посетителя. Сбрасываются строки и флаг YDFolderCreated.</li>
+<li>Реализованы все применимые пункты исправления. Не выполнены только проверки на работающем стенде и полноценная batchmode-проверка редактора, заменённая компиляцией C#.</li>
+</ul>
+
+<h2>Замечено, но не исправлено вне задания</h2>
+<ul>
+
+<li>Чтение конфига формата в Loader.Init использует прежний reader вместо formatSr; часть конфигурационных StreamReader не закрывается явно.</li>
+<li>В режиме isDoubleBuild AnimateShow сборки обложки ждёт первое фото через WaitUntil без тайм-аута. Если фото не появится, переход останется незавершённым.</li>
+<li>Локальное File.Copy в папку синхронизации не гарантирует, что клиент Яндекс.Диска уже отправил файлы к моменту появления публичной ссылки.</li>
+</ul>
+
+<h2>Проверка владельцем проекта</h2>
+<ol>
+<li>Открыть проект Unity 6000.0.62f1, дождаться импорта, проверить Console и привязки CanvasGroup/длительностей у всех экранов.</li>
+<li>В сборке выбрать «двое участников» и нажать «Сделать фото» сразу после появления экрана. Ожидается одна команда камеры и последующий переход на просмотр.</li>
+<li>Выключить приложение камеры и повторить съёмку. Ожидается окно ошибки; после закрытия можно повторить попытку. В редакторе запрос камеры по-прежнему пропускается директивой UNITY_EDITOR.</li>
+<li>Отключить сеть и дойти до QR: ожидается одно окно ошибки операции и возможность вернуться на заставку. Отдельно проверить отказ только QR-сервиса при доступном Яндекс.Диске: должен отображаться локально сгенерированный QR.</li>
+<li>Memory Profiler: снимок на заставке, три полные сессии с постером, возврат на заставку и второй снимок после UnloadUnusedAssets. Число Texture2D и Sprite должно совпасть либо отличаться на единицы, в том числе из-за первого заполнения кэша статических обложек.</li>
+<li>Во время загрузки вернуться на заставку и начать новую сессию: поздние ответы не должны менять её QR, постер, флаги и окна. Проверить мип-уровни миниатюр и непрозрачность постера при быстром нажатии «Далее».</li>
+</ol>
+</main></body></html>

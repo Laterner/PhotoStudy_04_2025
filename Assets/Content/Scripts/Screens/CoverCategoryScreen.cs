@@ -14,8 +14,6 @@ public class CoverCategoryScreen : ScreenBase
     [SerializeField] private float _videoPlayDuration = 2f;
     private int _selectedCategoryIndex = -1;
     private Coroutine _videoRoutine;
-    [SerializeField] private CanvasGroup _canvasGroup;
-    [SerializeField] private float _fadeDuration = 0.8f;
 
     public override void Initialize()
     {
@@ -83,7 +81,7 @@ public class CoverCategoryScreen : ScreenBase
 
     private void OnMainMenuPressed()
     {
-        ScreenManager.Instance.StartScreens();
+        ScreenManager.Instance.ResetSession();
         // ScreenManager.Instance.ShowScreen<ScreensaverScreen>();
     }
 

@@ -30,7 +30,7 @@ public class Loader : MonoBehaviour
     public VideoPlayer vp;
     public delegate void RepeatDelegate();
     // public static RepeatDelegate RepeatDrawQr;
-    private bool canCount, fileCreated, fileUploaded;
+    private bool canCount;
     [SerializeField] private float checkDelay, timer;
     public delegate Task UploadDelegate();
     // public static UploadDelegate UploadPhotos;
@@ -84,7 +84,7 @@ public class Loader : MonoBehaviour
         //Debug.Log(FilesPath + " | " + OutFilesPath);
         timer = 0;
         canCount = true;
-        fileCreated = false;
+
         downloadedFiles = new List<string>();
         posterCreationFinished = false;
 
@@ -99,199 +99,98 @@ public class Loader : MonoBehaviour
     [SerializeField] private int _checkIntervalMs = 500;
 
     private HashSet<string> _processedFiles = new HashSet<string>();
-    private bool _isMonitoring = false;
+    private CancellationTokenSource _monitorCancellation;
+    private readonly HashSet<string> _failedFiles = new HashSet<string>();
 
     public async void StartMonitoring()
     {
-        if (_isMonitoring) return;
-
-        _isMonitoring = true;
+        StopMonitoring();
+        var cancellation = new CancellationTokenSource();
+        _monitorCancellation = cancellation;
+        var token = cancellation.Token;
         _processedFiles.Clear();
-
-        while (_isMonitoring && _processedFiles.Count < _expectedPhotoCount)
-        {
-            await CheckForNewPhotos();
-            await Task.Delay(_checkIntervalMs);
-        }
-
-        _isMonitoring = false;
-        OnAllPhotosLoaded?.Invoke();
-    }
-
-    public void StopMonitoring()
-    {
-        _isMonitoring = false;
-    }
-
-    public string GetFilePath()
-    {
-        return FilesPath;
-    }
-    public string GetOutFilePath()
-    {
-        return OutFilesPath;
-    }
-
-    public void GetExistingPhotos()
-    {
-        CheckForNewPhotos();
-    }
-    private async Task CheckForNewPhotos()
-    {
+        _failedFiles.Clear();
         try
         {
-            var directory = new DirectoryInfo(FilesPath);
-            var files = directory.GetFiles($"*.{photoFormat}");
-
-            foreach (var file in files)
+            while (_processedFiles.Count < _expectedPhotoCount)
             {
-                if (!_processedFiles.Contains(file.Name))
-                {
-                    _processedFiles.Add(file.Name);
-                    var texture = await LoadTexture(file.FullName);
-                    if (texture != null)
-                    {
-                        OnNewPhotoLoaded?.Invoke(texture);
-
-                        if (_processedFiles.Count >= _expectedPhotoCount)
-                        {
-                            StopMonitoring();
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        _processedFiles.Remove(file.Name);
-                    }
-                }
+                await CheckForNewPhotos(token);
+                token.ThrowIfCancellationRequested();
+                if (_processedFiles.Count >= _expectedPhotoCount) break;
+                await Task.Delay(_checkIntervalMs, token);
+                token.ThrowIfCancellationRequested();
             }
+            OnAllPhotosLoaded?.Invoke();
         }
-        catch (Exception e)
+        catch (OperationCanceledException) { }
+        catch (Exception e) { Debug.LogException(e); }
+        finally
         {
-            Debug.LogError($"Photo monitoring error: {e.Message}");
+            if (_monitorCancellation == cancellation) _monitorCancellation = null;
+            cancellation.Dispose();
         }
     }
 
-    public async Task<List<Texture2D>> CheckForExistingPhotos()
+    public void StopMonitoring() { _monitorCancellation?.Cancel(); }
+    private void OnDestroy() { StopMonitoring(); }
+    public string GetFilePath() => FilesPath;
+    public string GetOutFilePath() => OutFilesPath;
+
+    private async Task CheckForNewPhotos(CancellationToken token)
     {
-        var directory = new DirectoryInfo(FilesPath);
-        var files = directory.GetFiles($"*.{photoFormat}");
-        var texs = new List<Texture2D>();
+        var files = new DirectoryInfo(FilesPath).GetFiles($"*.{photoFormat}");
         foreach (var file in files)
         {
-            _processedFiles.Add(file.Name);
-            var texture = await LoadTexture(file.FullName);
-            await  Task.Yield();
-            if (texture != null)
+            token.ThrowIfCancellationRequested();
+            if (_processedFiles.Contains(file.Name)) continue;
+            var texture = await LoadTexture(file.FullName, token);
+            if (token.IsCancellationRequested)
             {
-                texs.Add(texture);
+                TextureConverter.DestroyTexture(texture);
+                token.ThrowIfCancellationRequested();
             }
+            if (texture == null) continue;
+            _processedFiles.Add(file.Name);
+            // The review screen transfers this texture to the session owner.
+            if (OnNewPhotoLoaded == null) TextureConverter.DestroyTexture(texture);
+            else OnNewPhotoLoaded.Invoke(texture);
+            if (_processedFiles.Count >= _expectedPhotoCount) break;
         }
-        return texs;
     }
 
-    private async Task<Texture2D> LoadTexture(string filePath)
+    private async Task<Texture2D> LoadTexture(string filePath, CancellationToken token)
     {
+        Texture2D texture = null;
         try
         {
-            byte[] fileData = await File.ReadAllBytesAsync(filePath);
-            await  Task.Yield();
-            Texture2D texture = new Texture2D(2, 2);
-            if (IsPortrait)
-            {
-                texture.LoadImage(fileData);
-                await  Task.Yield();
-                return RotateTexture(texture, 90);
-            }
-            texture.LoadImage(fileData);
-            await  Task.Yield();
-            return texture;
+            byte[] fileData = await File.ReadAllBytesAsync(filePath, token);
+            token.ThrowIfCancellationRequested();
+            texture = new Texture2D(2, 2);
+            if (!texture.LoadImage(fileData))
+                throw new IOException("Image is not complete yet.");
+            if (!IsPortrait) return texture;
+            var rotated = TextureConverter.RotateTexture(texture);
+            TextureConverter.DestroyTexture(texture);
+            return rotated;
+        }
+        catch (OperationCanceledException)
+        {
+            TextureConverter.DestroyTexture(texture);
+            throw;
         }
         catch (Exception e)
         {
-            Debug.LogError($"Failed to load texture: {e.Message}");
+            TextureConverter.DestroyTexture(texture);
+            if (_failedFiles.Add(filePath))
+                Debug.LogWarning($"Failed to load {filePath}: {e.Message}. Will retry.");
             return null;
         }
     }
-
-    /// <summary>
-    /// Rotation
-    /// </summary>/
-    /// 
-    /// 
-
-    private Texture2D RotateTexture(Texture2D originalTexture, int angle)
-    {
-        angle = angle % 360;
-        if (angle == 0) return originalTexture;
-
-        Color32[] original = originalTexture.GetPixels32();
-        Color32[] rotated = new Color32[original.Length];
-        int w = originalTexture.width;
-        int h = originalTexture.height;
-
-        int x, y;
-        int i = 0;
-
-        switch (angle)
-        {
-            case 90:
-                for (x = 0; x < w; x++)
-                {
-                    for (y = h - 1; y >= 0; y--)
-                    {
-                        rotated[i] = original[x + y * w];
-                        i++;
-                    }
-                }
-                return CreateTextureFromColors(h, w, rotated);
-            case 180:
-                for (y = h - 1; y >= 0; y--)
-                {
-                    for (x = w - 1; x >= 0; x--)
-                    {
-                        rotated[i] = original[x + y * w];
-                        i++;
-                    }
-                }
-                return CreateTextureFromColors(w, h, rotated);
-            case 270:
-                for (x = w - 1; x >= 0; x--)
-                {
-                    for (y = 0; y < h; y++)
-                    {
-                        rotated[i] = original[x + y * w];
-                        i++;
-                    }
-                }
-                return CreateTextureFromColors(h, w, rotated);
-            default:
-                return originalTexture;
-        }
-    }
-
-    private Texture2D CreateTextureFromColors(int width, int height, Color32[] pixels)
-    {
-        Texture2D newTex = new Texture2D(width, height);
-        newTex.SetPixels32(pixels);
-        newTex.Apply();
-        return newTex;
-    }
-
-    /////////////
-    /// END ROTATION
-
-    public void CleanProcessedFiles()
-    {
-        _processedFiles.Clear();
-    }
-
-
-
     private async Task<Texture2D> BlendTexturesAsync(Texture2D baseTexture,
                                              IProgress<float> progress = null,
                                              CancellationToken cancellationToken = default)
     {
+        int session = container.SessionId;
         Texture2D resizedOverlay = null;
         Texture2D result = null;
 
@@ -307,12 +206,15 @@ public class Loader : MonoBehaviour
                 resizedOverlay = overlayTexture;
             }
 
-            // Конвертируем NativeArray в обычный массив
-            var baseData = baseTexture.GetRawTextureData<Color32>().ToArray();
-            var overlayData = resizedOverlay.GetRawTextureData<Color32>().ToArray();
-            var resultData = new Color32[baseData.Length];
+            // Convert the base mip to Color32; raw RGB24 bytes are not Color32 pixels.
+            var baseData = baseTexture.GetPixels32(0);
+            var overlayData = resizedOverlay.GetPixels32(0);
+            int pixelCount = checked(baseTexture.width * baseTexture.height);
+            if (baseData.Length != pixelCount || overlayData.Length != pixelCount)
+                throw new InvalidOperationException("Photo and overlay pixel counts must match their dimensions.");
+            var resultData = new Color32[pixelCount];
 
-            int totalPixels = baseData.Length;
+            int totalPixels = pixelCount;
             int chunkSize = Mathf.Max(1024, totalPixels / 100);
             int progressStep = Mathf.Max(1, totalPixels / 100);
             int nextProgressReport = 0;
@@ -334,6 +236,7 @@ public class Loader : MonoBehaviour
                 if ((i / chunkSize) % 10 == 0)
                 {
                     await Task.Yield();
+                    if (session != container.SessionId) throw new OperationCanceledException();
                 }
             }
 
@@ -345,11 +248,11 @@ public class Loader : MonoBehaviour
             progress?.Report(1f);
             return result;
         }
-        catch (OperationCanceledException)
+        catch (Exception)
         {
             if (result != null)
             {
-                Destroy(result);
+                TextureConverter.DestroyTexture(result);
             }
             throw;
         }
@@ -357,7 +260,7 @@ public class Loader : MonoBehaviour
         {
             if (resizedOverlay != null && resizedOverlay != overlayTexture)
             {
-                Destroy(resizedOverlay);
+                TextureConverter.DestroyTexture(resizedOverlay);
             }
         }
     }
@@ -392,6 +295,7 @@ public class Loader : MonoBehaviour
             return sourceTexture;
         }
 
+        var previous = RenderTexture.active;
         RenderTexture rt = null;
         Texture2D resizedTexture = null;
 
@@ -411,10 +315,11 @@ public class Loader : MonoBehaviour
 
             return resizedTexture;
         }
+        catch { TextureConverter.DestroyTexture(resizedTexture); throw; }
         finally
         {
             // Правильная очистка RenderTexture
-            RenderTexture.active = null;
+            RenderTexture.active = previous;
             if (rt != null)
             {
                 RenderTexture.ReleaseTemporary(rt);
@@ -423,269 +328,129 @@ public class Loader : MonoBehaviour
     }
 
 
-    public async Task UploadSelectedPhotosToDisk(Texture2D[] textures, bool hasConnection, bool isPoster = false)
+    public async Task<bool> UploadSelectedPhotosToDisk(Texture2D[] textures, bool isPoster = false)
     {
-        var names = new string[textures.Length];
-        if (string.IsNullOrEmpty(GlobalChosesDataContainer.Instance.CurrentFolderName))
+        int session = container.SessionId;
+        try
         {
-            folderName = DateTime.Now.ToSafeString().Replace(" ", "").Replace(":", "").Replace(".", "").Replace("_", ""); //$"{DateTime.Now.Hour}{DateTime.Now.Minute}{DateTime.Now.Second}";
-            GlobalChosesDataContainer.Instance.CurrentFolderName = folderName;
-        }
-        if (!isPoster)
-        {
+            if (textures == null || textures.Length == 0) throw new IOException("No photos to upload.");
+            if (string.IsNullOrEmpty(container.CurrentFolderName))
+                container.CurrentFolderName = DateTime.Now.ToSafeString().Replace(" ", "").Replace(":", "").Replace(".", "").Replace("_", "");
+            folderName = container.CurrentFolderName;
+            string uploadFolder = folderName;
+            var names = new string[textures.Length];
             for (int i = 0; i < textures.Length; i++)
             {
-                var index = i;
-                fileCreated = false;
-                names[index] = index.ToString() + "." + photoFormat;
-                Texture2D tmp = await BlendTexturesAsync(textures[i]);
-                await SaveScreenshotToFile(tmp, names[index]);
-                //await SaveScreenshotToFile(textures[i], names[index]);
-            }
-        }
-        else
-        {
-            fileCreated = false;
-            names = new string[1] { $"Poster.{photoFormat}" };
-            await SaveScreenshotToFile(textures[0], names[0]);
-        }
-        while (!fileCreated)
-        {
-            await Task.Yield();
-        }
-        // await Task.Delay(2000);
-        if (hasConnection)
-        {
-            fileUploaded = false;
-            await UploadingSelectedFilesToYandexDisk(names);
-            while (!fileUploaded)
-            {
-                await Task.Yield();
-            }
-        }
-        else
-        {
-            // DownloadPhotoScreen.EnableFatalNetworkError(folderName);
-            // ScreenManager.Instance.EnableError();
-            // await FakeSaveFileToDiskCompleted("example.com");
-            Debug.LogError(folderName);
-        }
-    }
-
-    private async Task UploadingSelectedFilesToYandexDisk(string[] names)
-    {
-        await Task.Delay(1000);
-        downloadResult = "";
-        var pathFileNameOpen = $"{OutFilesPath}/{folderName}";
-        // var folderName = $"{DateTime.Now.Hour}{DateTime.Now.Minute}{DateTime.Now.Second}";
-        // folderName = DateTime.Now.ToSafeString().Replace(" ", "").Replace(":", "").Replace(".", "").Replace("_", "");//.Substring(4);
-        // String[] names = new string[2] { "Photo.jpg", "PhotoWithFrame.jpg" };
-        // for (int i = 0; i < names.Length; i++)
-        if (string.IsNullOrEmpty(GlobalChosesDataContainer.Instance.CurrentFolderName))
-        {
-            folderName = DateTime.Now.ToSafeString().Replace(" ", "").Replace(":", "").Replace(".", "").Replace("_", ""); //$"{DateTime.Now.Hour}{DateTime.Now.Minute}{DateTime.Now.Second}";
-            GlobalChosesDataContainer.Instance.CurrentFolderName = folderName;
-        }                                                                                                             // {
-        Debug.Log(pathFileNameOpen);
-        Debug.Log(folderName);
-        await yandex.SaveFilesToDisk(pathFileNameOpen, folderName, names,
-            async (result) =>
-            {
-                await SaveFileToDiskCompleted(result);
-                downloadResult = result;
-                fileUploaded = true;
-            });
-    }
-
-    private async Task SaveFileToDiskCompleted(string url)
-    {
-        try
-        {
-            Debug.Log("----> " + url);
-            ////////////////////////////////////////////////////////////////// ДОБАВИТЬ ОТПРАВКУ URL ЧТОБЫ ПОЛУЧИТЬ ТЕКСТУРУ QR КОДА ///////////////////////////////////////////////////////////////////////////
-            // var qrCodeDrawing = new QRCodeDrawing();
-            // await Task.Delay(2000);
-
-            // Texture2D qr = null;
-            // if (url != "")
-            //     qr = qrCodeDrawing.DrowQRCode(url);
-
-            // container.QRCode = qr;
-            // DownloadPhotoScreen.SetupQr.Invoke();
-
-            ////////////////////////////////// // ScreenManager.Instance.GetScreen<QrCodeScreen>().setupQr()
-            /// 
-            GetComponent<QrGeneratorOnline>().UploadPhotoLink(url, (response) =>
-           {
-               if (response != null && response.success)
-               {
-
-
-                   Debug.Log($"Получен QR-код: {response.data.link.qr}");
-
-                   StartCoroutine(LoadQRCodeTexture(response.data.link.qr, async (texture) =>
-                           {
-                               if (texture != null)
-                               {
-                                   Debug.Log("QR-код успешно загружен как Texture2D");
-                                   container.QrCodePhotos = texture;
-                                   container.QrCodePoster = texture;
-                                   // DownloadPhotoScreen.SetupQr.Invoke();
-
-                                   ScreenManager.Instance.GetScreen<QrCodeScreen>().setupQr(texture);
-                                   ScreenManager.Instance.GetScreen<QrCodeCoverScreen>().setupQr(texture);
-                               }
-                               else
-                               {
-                                   Debug.LogError("Не удалось загрузить QR-код");
-
-                                   var qrCodeDrawing = new QRCodeDrawing();
-                                   // await Task.Delay(2000);
-
-                                   Texture2D qr = null;
-                                   if (url != "")
-                                       qr = qrCodeDrawing.DrowQRCode(url);
-
-                                   container.QrCodePhotos = texture;
-                                   container.QrCodePoster = texture;
-                                   // DownloadPhotoScreen.SetupQr.Invoke();
-
-                                   ScreenManager.Instance.GetScreen<QrCodeScreen>().setupQr(texture);
-                                   ScreenManager.Instance.GetScreen<QrCodeCoverScreen>().setupQr(texture);
-                               }
-                           }));
-               }
-           });
-
-        }
-        catch (Exception e)
-        {
-            Debug.Log("qr error" + e.Message);
-            // DownloadPhotoScreen.EnableQrError.Invoke();
-        }
-        // isUploadingFileToYandexDisk = false;
-    }
-
-    private async Task FakeSaveFileToDiskCompleted(string url)
-    {
-        try
-        {
-            Debug.Log("----> " + url);
-            ////////////////////////////////////////////////////////////////// ДОБАВИТЬ ОТПРАВКУ URL ЧТОБЫ ПОЛУЧИТЬ ТЕКСТУРУ QR КОДА ///////////////////////////////////////////////////////////////////////////
-            // var qrCodeDrawing = new QRCodeDrawing();
-            // await Task.Delay(2000);
-
-            // Texture2D qr = null;
-            // if (url != "")
-            //     qr = qrCodeDrawing.DrowQRCode(url);
-
-            GetComponent<QrGeneratorOnline>().UploadPhotoLink("https://example.com/my-photo.jpg", (response) =>
-            {
-                if (response != null && response.success)
+                if (session != container.SessionId) return false;
+                names[i] = isPoster ? $"Poster.{photoFormat}" : $"{i}.{photoFormat}";
+                Texture2D temporary = null;
+                try
                 {
-
-
-                    Debug.Log($"Получен QR-код: {response.data.link.qr}");
-
-                    StartCoroutine(LoadQRCodeTexture(response.data.link.qr, async (texture) =>
-                            {
-                                if (texture != null)
-                                {
-                                    Debug.Log("QR-код успешно загружен как Texture2D");
-                                    container.QrCodePhotos = texture;
-                                    container.QrCodePoster = texture;
-                                    // DownloadPhotoScreen.SetupQr.Invoke();
-
-                                    ScreenManager.Instance.GetScreen<QrCodeScreen>().setupQr(texture);
-                                    ScreenManager.Instance.GetScreen<QrCodeCoverScreen>().setupQr(texture);
-                                }
-                                else
-                                {
-                                    Debug.LogError("Не удалось загрузить QR-код");
-
-                                    var qrCodeDrawing = new QRCodeDrawing();
-                                    // await Task.Delay(2000);
-
-                                    Texture2D qr = null;
-                                    if (url != "")
-                                        qr = qrCodeDrawing.DrowQRCode(url);
-
-                                    container.QrCodePhotos = texture;
-                                    container.QrCodePoster = texture;
-                                    // DownloadPhotoScreen.SetupQr.Invoke();
-
-                                    ScreenManager.Instance.GetScreen<QrCodeScreen>().setupQr(texture);
-                                    ScreenManager.Instance.GetScreen<QrCodeCoverScreen>().setupQr(texture);
-                                }
-                            }));
+                    if (!isPoster)
+                    {
+                        temporary = await BlendTexturesAsync(textures[i]);
+                        if (session != container.SessionId) return false;
+                    }
+                    bool saved = await SaveScreenshotToFile(isPoster ? textures[i] : temporary, uploadFolder, names[i]);
+                    if (session != container.SessionId) return false;
+                    if (!saved) throw new IOException("Could not save photo.");
                 }
-            });
-
-
-
+                finally { TextureConverter.DestroyTexture(temporary); }
+            }
+            string url = await yandex.SaveFilesToDisk(Path.Combine(OutFilesPath, uploadFolder), uploadFolder, names);
+            if (session != container.SessionId) return false;
+            if (string.IsNullOrEmpty(url)) throw new IOException("Could not upload photos.");
+            var completion = new TaskCompletionSource<bool>();
+            StartCoroutine(CreateQrCode(url, isPoster, session, completion));
+            bool success = await completion.Task;
+            if (session != container.SessionId) return false;
+            if (!success) throw new IOException("Could not create QR code.");
+            return true;
         }
         catch (Exception e)
         {
-            Debug.Log("qr error" + e.Message);
-            // DownloadPhotoScreen.EnableQrError.Invoke();
+            if (session == container.SessionId)
+            {
+                Debug.LogWarning(e.Message);
+                ScreenManager.Instance.EnableError();
+            }
+            return false;
         }
-        // isUploadingFileToYandexDisk = false;
     }
 
+    private IEnumerator CreateQrCode(string url, bool isPoster, int session, TaskCompletionSource<bool> completion)
+    {
+        Texture2D texture = null;
+        try
+        {
+            QrGeneratorOnline.ApiResponse response = null;
+            var generator = GetComponent<QrGeneratorOnline>();
+            if (generator != null)
+            {
+                yield return generator.UploadPhotoLinkCoroutine(url, result => response = result);
+                if (session != container.SessionId) yield break;
+            }
+            string qrUrl = response != null && response.success ? response.data?.link?.qr : null;
+            UnityWebRequest request = null;
+            try
+            {
+                if (!string.IsNullOrEmpty(qrUrl)) request = UnityWebRequestTexture.GetTexture(qrUrl);
+            }
+            catch (Exception e) { Debug.LogWarning(e.Message); }
+            if (request != null)
+            {
+                using (request)
+                {
+                    request.timeout = 30;
+                    UnityWebRequestAsyncOperation operation = null;
+                    try { operation = request.SendWebRequest(); }
+                    catch (Exception e) { Debug.LogWarning(e.Message); }
+                    if (operation != null) yield return operation;
+                    if (operation != null && request.result == UnityWebRequest.Result.Success)
+                    {
+                        try { texture = DownloadHandlerTexture.GetContent(request); }
+                        catch (Exception e) { Debug.LogWarning(e.Message); }
+                    }
+                    if (session != container.SessionId) yield break;
+                }
+            }
+            try
+            {
+                if (texture == null) texture = new QRCodeDrawing().DrowQRCode(url);
+                if (texture != null)
+                {
+                    container.SetQrCode(texture);
+                    texture = null; // Ownership transferred.
+                    if (isPoster) ScreenManager.Instance.GetScreen<QrCodeCoverScreen>().setupQr(container.QrCode);
+                    else ScreenManager.Instance.GetScreen<QrCodeScreen>().setupQr(container.QrCode);
+                    completion.TrySetResult(true);
+                }
+            }
+            catch (Exception e) { Debug.LogWarning(e.Message); }
+        }
+        finally
+        {
+            TextureConverter.DestroyTexture(texture);
+            completion.TrySetResult(false);
+        }
+    }
 
-    private async Task SaveScreenshotToFile(Texture2D texture, string name)
+    private async Task<bool> SaveScreenshotToFile(Texture2D texture, string uploadFolder, string name)
     {
         try
         {
             byte[] bytes = texture.EncodeToJPG();
-            // var folderName = $"{DateTime.Now.Hour}{DateTime.Now.Minute}{DateTime.Now.Second}";// ToSafeString().Replace(" ", "_").Replace(":", "-").Replace(".", "-").;
-            string path = $"{OutFilesPath}/{folderName}";
-            if (!Directory.Exists(path))
-            {
-                DirectoryInfo di = Directory.CreateDirectory(path);
-            }
-
-            var pathFileScreenshot = $"{OutFilesPath}/{folderName}/{name}"; //Path.Combine(OutFilesPath, nameFileScreenshot);
-            if (File.Exists(pathFileScreenshot))
-            {
-                Debug.Log($"Файл: {pathFileScreenshot}, уже существует. Удаляю его!");
-                File.Delete(pathFileScreenshot);
-            }
-            await File.WriteAllBytesAsync(pathFileScreenshot, bytes);
-#if UNITY_EDITOR
-            UnityEditor.AssetDatabase.Refresh();
-#endif
-            Debug.Log($"Done SaveScreenshotToFile: {pathFileScreenshot}");
-            fileCreated = true;
+            string path = Path.Combine(OutFilesPath, uploadFolder);
+            Directory.CreateDirectory(path);
+            await File.WriteAllBytesAsync(Path.Combine(path, name), bytes);
+            return true;
         }
-        catch (Exception ex)
+        catch (Exception e)
         {
-            Debug.Log($"Error SaveScreenshotToFile: {ex.Message}");
+            Debug.LogWarning(e.Message);
+            return false;
         }
     }
-
-    async Task<Texture2D> DownloadTexture(string url)
-    {
-        using (UnityWebRequest uwr = UnityWebRequestTexture.GetTexture(url))
-        {
-            uwr.SendWebRequest();
-            while (!uwr.isDone)
-            {
-                await Task.Yield();
-            }
-
-            if (uwr.result != UnityWebRequest.Result.Success)
-            {
-                Debug.Log(uwr.error);
-                return null;
-            }
-            else
-            {
-                return DownloadHandlerTexture.GetContent(uwr);
-            }
-        }
-    }
-
     public void CleanFolder()
     {
         var directory = new DirectoryInfo(FilesPath);
@@ -694,7 +459,8 @@ public class Loader : MonoBehaviour
         foreach (var file in files)
         {
             string FilePath = Path.Combine(FilesPath, file.Name);
-            File.Delete(FilePath);
+            try { File.Delete(FilePath); }
+            catch (Exception e) { Debug.LogWarning($"Cannot delete {file.Name}: {e.Message}"); }
         }
     }
 
@@ -708,76 +474,78 @@ public class Loader : MonoBehaviour
     private IEnumerator CaptureUIAreaCoroutine(RectTransform uiElement, string folderPath, string fileName,
                                              int targetWidth, int targetHeight)
     {
-        yield return new WaitForEndOfFrame();
+        int session = container.SessionId;
+        try
+        {
+            yield return new WaitForEndOfFrame();
+            if (session != container.SessionId) yield break;
+            try { container.SetPoster(CaptureUIArea(uiElement, targetWidth, targetHeight)); }
+            catch (Exception e)
+            {
+                container.SetPoster(null);
+                Debug.LogException(e);
+            }
+        }
+        finally
+        {
+            if (session == container.SessionId) posterCreationFinished = true;
+        }
+    }
 
+    private Texture2D CaptureUIArea(RectTransform uiElement, int targetWidth, int targetHeight)
+    {
         Canvas canvas = uiElement.GetComponentInParent<Canvas>();
         Vector3[] worldCorners = new Vector3[4];
         uiElement.GetWorldCorners(worldCorners);
-
-        Vector2 min = RectTransformUtility.WorldToScreenPoint(canvas.worldCamera ?? Camera.main, worldCorners[0]);
-        Vector2 max = RectTransformUtility.WorldToScreenPoint(canvas.worldCamera ?? Camera.main, worldCorners[2]);
-        if (canvas.renderMode == RenderMode.ScreenSpaceOverlay)
+        Camera camera = canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera ?? Camera.main;
+        Vector2 min = RectTransformUtility.WorldToScreenPoint(camera, worldCorners[0]);
+        Vector2 max = RectTransformUtility.WorldToScreenPoint(camera, worldCorners[2]);
+        Rect rect = new Rect(Mathf.Max(0, min.x), Mathf.Max(0, min.y),
+            Mathf.Min(Screen.width, max.x - min.x), Mathf.Min(Screen.height, max.y - min.y));
+        if (rect.width <= 10 || rect.height <= 10) return null;
+        Texture2D screenTex = null;
+        Texture2D croppedTex = null;
+        try
         {
-            min = RectTransformUtility.WorldToScreenPoint(null, worldCorners[0]);
-            max = RectTransformUtility.WorldToScreenPoint(null, worldCorners[2]);
+            screenTex = ScreenCapture.CaptureScreenshotAsTexture();
+            croppedTex = new Texture2D((int)rect.width, (int)rect.height, TextureFormat.RGBA32, false);
+            croppedTex.SetPixels(screenTex.GetPixels((int)rect.x, (int)rect.y, (int)rect.width, (int)rect.height));
+            croppedTex.Apply();
+            if (targetWidth != croppedTex.width || targetHeight != croppedTex.height)
+                return ScaleTexture(croppedTex, croppedTex.width * 2, croppedTex.height * 2);
+            var result = croppedTex;
+            croppedTex = null;
+            return result;
         }
-
-        Rect screenRect = new Rect(
-            x: Mathf.Max(0, min.x),
-            y: Mathf.Max(0, min.y),
-            width: Mathf.Min(Screen.width, max.x - min.x),
-            height: Mathf.Min(Screen.height, max.y - min.y)
-        );
-
-        Debug.Log($"Normalized screen rect: {screenRect}");
-
-        if (screenRect.width <= 10 || screenRect.height <= 10)
+        finally
         {
-            Debug.LogError($"UI Element is too small or invalid: {screenRect}");
-            yield break;
+            TextureConverter.DestroyTexture(screenTex);
+            TextureConverter.DestroyTexture(croppedTex);
         }
-
-        Texture2D screenTex = ScreenCapture.CaptureScreenshotAsTexture();
-        Debug.Log(screenRect);
-        Texture2D croppedTex = new Texture2D((int)screenRect.width, (int)screenRect.height, TextureFormat.RGBA32, false);
-        Color[] pixels = screenTex.GetPixels((int)screenRect.x, (int)screenRect.y,
-                                          (int)screenRect.width, (int)screenRect.height);
-        croppedTex.SetPixels(pixels);
-        croppedTex.Apply();
-        Destroy(screenTex);
-
-        Texture2D finalTex = croppedTex;
-        if (targetWidth != croppedTex.width || targetHeight != croppedTex.height)
-        {
-            finalTex = ScaleTexture(croppedTex, croppedTex.width * 2, croppedTex.height * 2);//ScaleTexture(croppedTex, targetWidth, targetHeight);
-            Destroy(croppedTex);
-        }
-
-        string fullPath = Path.Combine(folderPath, fileName + ".jpg");
-        Directory.CreateDirectory(folderPath);
-        File.WriteAllBytes(fullPath, finalTex.EncodeToJPG());
-        Debug.Log($"Screenshot saved to: {fullPath}");
-
-        GlobalChosesDataContainer.Instance.Poster = finalTex;
-        posterCreationFinished = true;
-        // Destroy(finalTex);
     }
 
     private Texture2D ScaleTexture(Texture2D source, int newWidth, int newHeight)
     {
         source.filterMode = FilterMode.Bilinear;
-        RenderTexture rt = RenderTexture.GetTemporary(newWidth, newHeight);
-        RenderTexture.active = rt;
-        Graphics.Blit(source, rt);
-
-        Texture2D scaledTex = new Texture2D(newWidth, newHeight, TextureFormat.RGBA32, false);
-        scaledTex.ReadPixels(new Rect(0, 0, newWidth, newHeight), 0, 0);
-        scaledTex.Apply();
-
-        RenderTexture.ReleaseTemporary(rt);
-        return scaledTex;
+        var previous = RenderTexture.active;
+        var rt = RenderTexture.GetTemporary(newWidth, newHeight);
+        Texture2D scaledTex = null;
+        try
+        {
+            RenderTexture.active = rt;
+            Graphics.Blit(source, rt);
+            scaledTex = new Texture2D(newWidth, newHeight, TextureFormat.RGBA32, false);
+            scaledTex.ReadPixels(new Rect(0, 0, newWidth, newHeight), 0, 0);
+            scaledTex.Apply();
+            return scaledTex;
+        }
+        catch { TextureConverter.DestroyTexture(scaledTex); throw; }
+        finally
+        {
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(rt);
+        }
     }
-
     public void TryUploadPhotosToFlashDisk()
     {
         flashDiskUploadManager.CopyFolderToRemovableDrive($"{OutFilesPath}/{folderName}");
@@ -789,58 +557,4 @@ public class Loader : MonoBehaviour
     }
 
 
-    private static void SetAllCanvasesEnabled(bool enabled)
-    {
-        Canvas[] allCanvases = GameObject.FindObjectsOfType<Canvas>();
-        foreach (Canvas canvas in allCanvases)
-        {
-            if (canvas.renderMode != RenderMode.WorldSpace)
-                canvas.enabled = enabled;
-        }
-    }
-
-
-    private IEnumerator LoadQRCodeTexture(string svgUrl, System.Action<Texture2D> callback)
-    {
-        using (UnityWebRequest textureRequest = UnityWebRequestTexture.GetTexture(svgUrl))
-        {
-            yield return textureRequest.SendWebRequest();
-
-            if (textureRequest.result == UnityWebRequest.Result.ConnectionError ||
-                textureRequest.result == UnityWebRequest.Result.ProtocolError)
-            {
-                Debug.LogError($"Ошибка загрузки QR-кода: {textureRequest.error}");
-                callback?.Invoke(null);
-            }
-            else
-            {
-                // Получаем текстуру из загрузчика
-                Texture2D texture = DownloadHandlerTexture.GetContent(textureRequest);
-                // Опционально: делаем текстуру читаемой (если нужно манипулировать пикселями)
-                // texture = MakeTextureReadable(texture);
-
-                callback?.Invoke(texture);
-            }
-        }
-    }
-
-    private Texture2D MakeTextureReadable(Texture2D source)
-    {
-        RenderTexture renderTex = RenderTexture.GetTemporary(
-            source.width,
-            source.height,
-            0,
-            RenderTextureFormat.Default,
-            RenderTextureReadWrite.Linear);
-
-        Graphics.Blit(source, renderTex);
-        RenderTexture previous = RenderTexture.active;
-        RenderTexture.active = renderTex;
-        Texture2D readableText = new Texture2D(source.width, source.height);
-        readableText.ReadPixels(new Rect(0, 0, renderTex.width, renderTex.height), 0, 0);
-        readableText.Apply();
-        RenderTexture.active = previous;
-        RenderTexture.ReleaseTemporary(renderTex);
-        return readableText;
-    }
 }
