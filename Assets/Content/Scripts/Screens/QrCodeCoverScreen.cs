@@ -90,7 +90,7 @@ public class QrCodeCoverScreen : ScreenBase
             return;
         }
         _posterImage.sprite = TextureConverter.ConvertTextureToSprite(poster);
-        bool uploaded = await _loader.UploadSelectedPhotosToDisk(new[] { poster }, true);
+        bool uploaded = await _loader.UploadSelectedPhotosToDisk(new[] { poster }, hasConnection: true, isPoster: true);
         if (session != GlobalChosesDataContainer.Instance.SessionId) return;
         _photosDownloaded = true;
         if (uploaded) _loader.TryUploadPhotosToFlashDisk();

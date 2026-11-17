@@ -45,21 +45,24 @@ public static class TextureConverter
     }
     public static Texture2D RotateTexture(Texture2D source)
     {
-        bool rawFormat = source.format == TextureFormat.RGB24 || source.format == TextureFormat.RGBA32 ||
-            source.format == TextureFormat.ARGB32 || source.format == TextureFormat.BGRA32;
-        var result = new Texture2D(source.height, source.width,
-            rawFormat ? source.format : TextureFormat.RGBA32, true);
+        var result = new Texture2D(source.height, source.width, TextureFormat.RGBA32, true);
         try
         {
             switch (source.format)
             {
                 case TextureFormat.RGB24:
-                    RotatePixels(source.GetPixelData<Rgb24>(0), result.GetPixelData<Rgb24>(0), source.width, source.height);
+                    var rgb = source.GetPixelData<Rgb24>(0);
+                    var rgba = result.GetPixelData<Color32>(0);
+                    int destinationIndex = 0;
+                    for (int x = 0; x < source.width; x++)
+                        for (int y = source.height - 1; y >= 0; y--)
+                        {
+                            var pixel = rgb[x + y * source.width];
+                            rgba[destinationIndex++] = new Color32(pixel.R, pixel.G, pixel.B, 255);
+                        }
                     break;
                 case TextureFormat.RGBA32:
-                case TextureFormat.ARGB32:
-                case TextureFormat.BGRA32:
-                    RotatePixels(source.GetPixelData<uint>(0), result.GetPixelData<uint>(0), source.width, source.height);
+                    RotatePixels(source.GetPixelData<Color32>(0), result.GetPixelData<Color32>(0), source.width, source.height);
                     break;
                 default:
                     var pixels = source.GetPixels32();

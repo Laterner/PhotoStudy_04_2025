@@ -42,7 +42,7 @@ public class PhotoReviewScreen : ScreenBase
     }
     private void LoadCapturedPhotos(Texture2D tex)
     {
-        CapturedPhotos.Add(tex);
+
         Debug.Log(CapturedPhotos.Count);
 
         DisplayOnePhoto(tex, CapturedPhotos.Count - 1);

@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System;
 using System.Threading.Tasks;
-using Unity.VisualScripting;
+
 
 public class MakeCoverScreen : ScreenBase
 {
@@ -59,6 +59,8 @@ public class MakeCoverScreen : ScreenBase
             _thumbnails.Clear();
             _loader.OnNewPhotoLoaded -= LoadCapturedPhotos;
             _loader.OnNewPhotoLoaded += LoadCapturedPhotos;
+            ScreenManager.Instance.GetScreen<PhotoReviewScreen>()?.CleanPhotosContainer();
+            GlobalChosesDataContainer.Instance.ClearPhotos();
             _loader.StartMonitoring();
             // _photosLoaded = false;
             // LoadCapturedPhotos();
@@ -182,7 +184,7 @@ public class MakeCoverScreen : ScreenBase
 
         // ����� �������� ������
         Vector2 size = _posterImage.rectTransform.rect.size;
-        _loader.CaptureAreaAndSave(_posterImage.rectTransform, _loader.GetFilePath(), DateTime.Now.ToSafeString().Replace(" ", "").Replace(":", "").Replace(".", "").Replace("_", ""));
+        _loader.CaptureAreaAndSave(_posterImage.rectTransform, _loader.GetFilePath(), DateTime.Now.ToString("ddMMyyyyHHmmss", System.Globalization.CultureInfo.InvariantCulture));
          await Task.Delay(1000);
         if (session != GlobalChosesDataContainer.Instance.SessionId) return;
         // await _loader.UploadSelectedPhotosToDisk(new Texture2D[1] { GlobalChosesDataContainer.Instance.Poster }, true, true);

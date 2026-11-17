@@ -135,7 +135,7 @@ public class ScreenManager : MonoBehaviour
             while (newScreen != null)
             {
                 _transitionTarget = newScreen;
-                _canCount = newScreen != _initialScreen;
+                _canCount = _initialScreen == null || newScreen.GetType() != _initialScreen.GetType();
                 _currentTimer = 0;
                 if (_currentScreen != null)
                 {
@@ -224,7 +224,12 @@ public class ScreenManager : MonoBehaviour
     {
         _currentTimer = 0;
         _loader.CleanFolder();
-        ShowScreen<ScreensaverScreen>();
+        if (_initialScreen != null && _initialScreen.GetType() != typeof(ScreensaverScreen))
+        {
+            GetScreen<PhotoReviewScreen>()?.CleanPhotosContainer();
+            container.Clean();
+        }
+        StartScreens();
         _loader.StartMonitoring();
     }
 }

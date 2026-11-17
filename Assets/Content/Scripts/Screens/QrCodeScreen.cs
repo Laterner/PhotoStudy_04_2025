@@ -70,7 +70,7 @@ public class QrCodeScreen : ScreenBase
         _photosDownloaded = false;
         _qrCodeImage.sprite = null;
         _qrCodeImagePreloaderCG.DOFade(1, 0);
-        _loader.UploadSelectedPhotosToDisk(_selectedPhotos.ToArray());
+        _ = _loader.UploadSelectedPhotosToDisk(_selectedPhotos.ToArray(), hasConnection: true);
     }
 
 

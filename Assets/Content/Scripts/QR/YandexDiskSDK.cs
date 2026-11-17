@@ -2,10 +2,10 @@ using System;
 using System.Collections;
 using System.IO;
 using System.Linq;
-using System.Net;
+
 using System.Net.Http;
 using System.Threading.Tasks;
-using Unity.VisualScripting;
+
 
 using UnityEngine;
 
@@ -108,18 +108,5 @@ namespace Project
             return end < 0 ? null : body.Substring(start, end - start);
         }
 
-        // Retained for installations using direct upload; the transport is unchanged.
-        private async Task UploadingFileToDisk(string path, string folderName)
-        {
-            int session = GlobalChosesDataContainer.Instance.SessionId;
-            string body = await Send(HttpMethod.Get, "https://cloud-api.yandex.net/v1/disk/resources/upload?path=" + path + "&overwrite=true", session);
-            if (!IsCurrent(session)) return;
-            string url = ExtractUrl(body, "href");
-            using (var client = new WebClient())
-            {
-                await client.UploadFileTaskAsync(new Uri(url), sourcePath);
-                if (!IsCurrent(session)) return;
-            }
-        }
     }
 }

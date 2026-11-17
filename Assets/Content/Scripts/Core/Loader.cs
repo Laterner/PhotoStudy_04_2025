@@ -8,7 +8,7 @@ using System.Runtime.Serialization.Formatters.Binary;
 using System.Threading;
 using System.Threading.Tasks;
 using Project;
-using Unity.VisualScripting;
+
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.UI;
@@ -151,9 +151,8 @@ public class Loader : MonoBehaviour
             }
             if (texture == null) continue;
             _processedFiles.Add(file.Name);
-            // The review screen transfers this texture to the session owner.
-            if (OnNewPhotoLoaded == null) TextureConverter.DestroyTexture(texture);
-            else OnNewPhotoLoaded.Invoke(texture);
+            container.Photos.Add(texture);
+            OnNewPhotoLoaded?.Invoke(texture);
             if (_processedFiles.Count >= _expectedPhotoCount) break;
         }
     }
@@ -186,88 +185,44 @@ public class Loader : MonoBehaviour
             return null;
         }
     }
-    private async Task<Texture2D> BlendTexturesAsync(Texture2D baseTexture,
-                                             IProgress<float> progress = null,
-                                             CancellationToken cancellationToken = default)
+    private Texture2D BlendTextures(Texture2D baseTexture)
     {
-        int session = container.SessionId;
+        Texture2D convertedBase = null;
         Texture2D resizedOverlay = null;
         Texture2D result = null;
-
         try
         {
-            // Проверяем размеры текстур
-            if (baseTexture.width != overlayTexture.width || baseTexture.height != overlayTexture.height)
+            if (baseTexture.format != TextureFormat.RGBA32)
             {
-                resizedOverlay = ResizeTexture(overlayTexture, baseTexture.width, baseTexture.height);
+                convertedBase = new Texture2D(baseTexture.width, baseTexture.height, TextureFormat.RGBA32, false);
+                convertedBase.SetPixels32(baseTexture.GetPixels32(0));
+                convertedBase.Apply(false);
             }
-            else
-            {
-                resizedOverlay = overlayTexture;
-            }
-
-            // Convert the base mip to Color32; raw RGB24 bytes are not Color32 pixels.
-            var baseData = baseTexture.GetPixels32(0);
-            var overlayData = resizedOverlay.GetPixels32(0);
+            resizedOverlay = ResizeTexture(overlayTexture, baseTexture.width, baseTexture.height);
+            result = new Texture2D(baseTexture.width, baseTexture.height, TextureFormat.RGBA32, false);
+            // Native views remain valid: there are no awaits or callbacks during this pass.
+            var baseData = (convertedBase ?? baseTexture).GetPixelData<Color32>(0);
+            var overlayData = resizedOverlay.GetPixelData<Color32>(0);
+            var resultData = result.GetPixelData<Color32>(0);
             int pixelCount = checked(baseTexture.width * baseTexture.height);
-            if (baseData.Length != pixelCount || overlayData.Length != pixelCount)
-                throw new InvalidOperationException("Photo and overlay pixel counts must match their dimensions.");
-            var resultData = new Color32[pixelCount];
-
-            int totalPixels = pixelCount;
-            int chunkSize = Mathf.Max(1024, totalPixels / 100);
-            int progressStep = Mathf.Max(1, totalPixels / 100);
-            int nextProgressReport = 0;
-
-            for (int i = 0; i < totalPixels; i += chunkSize)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                int endIndex = Mathf.Min(i + chunkSize, totalPixels);
-
-                ProcessChunkFast(baseData, overlayData, resultData, i, endIndex);
-
-                if (i >= nextProgressReport)
-                {
-                    progress?.Report((float)i / totalPixels);
-                    nextProgressReport += progressStep;
-                }
-
-                if ((i / chunkSize) % 10 == 0)
-                {
-                    await Task.Yield();
-                    if (session != container.SessionId) throw new OperationCanceledException();
-                }
-            }
-
-            result = new Texture2D(baseTexture.width, baseTexture.height,
-                                   TextureFormat.RGBA32, false);
-            result.SetPixelData(resultData, 0);
+            ProcessChunkFast(baseData, overlayData, resultData, 0, pixelCount);
             result.Apply(false);
-
-            progress?.Report(1f);
             return result;
         }
-        catch (Exception)
+        catch
         {
-            if (result != null)
-            {
-                TextureConverter.DestroyTexture(result);
-            }
+            TextureConverter.DestroyTexture(result);
             throw;
         }
         finally
         {
-            if (resizedOverlay != null && resizedOverlay != overlayTexture)
-            {
-                TextureConverter.DestroyTexture(resizedOverlay);
-            }
+            TextureConverter.DestroyTexture(convertedBase);
+            if (resizedOverlay != overlayTexture) TextureConverter.DestroyTexture(resizedOverlay);
         }
     }
-
-    // Простая версия с обычными массивами
-    private void ProcessChunkFast(Color32[] baseData, Color32[] overlayData,
-                                  Color32[] resultData, int start, int end)
+    // Blend only mip zero, preserving the existing alpha formula.
+    private void ProcessChunkFast(Unity.Collections.NativeArray<Color32> baseData, Unity.Collections.NativeArray<Color32> overlayData,
+                                  Unity.Collections.NativeArray<Color32> resultData, int start, int end)
     {
         for (int i = start; i < end; i++)
         {
@@ -290,7 +245,7 @@ public class Loader : MonoBehaviour
     private Texture2D ResizeTexture(Texture2D sourceTexture, int newWidth, int newHeight)
     {
         // Проверяем, не нужно ли вообще менять размер
-        if (sourceTexture.width == newWidth && sourceTexture.height == newHeight)
+        if (sourceTexture.width == newWidth && sourceTexture.height == newHeight && sourceTexture.format == TextureFormat.RGBA32)
         {
             return sourceTexture;
         }
@@ -328,14 +283,14 @@ public class Loader : MonoBehaviour
     }
 
 
-    public async Task<bool> UploadSelectedPhotosToDisk(Texture2D[] textures, bool isPoster = false)
+    public async Task<bool> UploadSelectedPhotosToDisk(Texture2D[] textures, bool hasConnection, bool isPoster = false)
     {
         int session = container.SessionId;
         try
         {
             if (textures == null || textures.Length == 0) throw new IOException("No photos to upload.");
             if (string.IsNullOrEmpty(container.CurrentFolderName))
-                container.CurrentFolderName = DateTime.Now.ToSafeString().Replace(" ", "").Replace(":", "").Replace(".", "").Replace("_", "");
+                container.CurrentFolderName = DateTime.Now.ToString("ddMMyyyyHHmmss", System.Globalization.CultureInfo.InvariantCulture);
             folderName = container.CurrentFolderName;
             string uploadFolder = folderName;
             var names = new string[textures.Length];
@@ -348,7 +303,7 @@ public class Loader : MonoBehaviour
                 {
                     if (!isPoster)
                     {
-                        temporary = await BlendTexturesAsync(textures[i]);
+                        temporary = BlendTextures(textures[i]);
                         if (session != container.SessionId) return false;
                     }
                     bool saved = await SaveScreenshotToFile(isPoster ? textures[i] : temporary, uploadFolder, names[i]);
@@ -357,6 +312,7 @@ public class Loader : MonoBehaviour
                 }
                 finally { TextureConverter.DestroyTexture(temporary); }
             }
+            if (!hasConnection) return true;
             string url = await yandex.SaveFilesToDisk(Path.Combine(OutFilesPath, uploadFolder), uploadFolder, names);
             if (session != container.SessionId) return false;
             if (string.IsNullOrEmpty(url)) throw new IOException("Could not upload photos.");

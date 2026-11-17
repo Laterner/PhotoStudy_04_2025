@@ -55,7 +55,6 @@ public class BoundedLeanDrag : LeanDragTranslate
             parentBounds.max.y - selfBounds.max.y
         );
         transform.localPosition = localPos;
-        print("locat transform::" + transform.localPosition);
     }
 
     private Bounds GetBounds(RectTransform rt)
